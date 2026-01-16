@@ -3,7 +3,7 @@ name: Release Obsidian Plugin
 on:
   push:
     tags:
-      - "*"
+      - '*'
 
 permissions:
   contents: write
@@ -18,21 +18,20 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: "18"
+          node-version: '18'
 
       - name: Build plugin
         run: |
           npm install
           npm run build
 
-      - name: Create release
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          files: |
+            main.js
+            manifest.json
+            styles.css
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" \
-            --title="$tag" \
-            --draft \
-            main.js \
-            manifest.json \
-            styles.css
