@@ -1,0 +1,294 @@
+/* 卢曼笔记导航器样式 */
+
+.zettelkasten-view {
+	padding: 0;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+}
+
+/* 头部区域 */
+.zk-header {
+	border-bottom: 1px solid var(--background-modifier-border);
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.zk-count {
+	color: var(--text-muted);
+	font-size: 0.9em;
+	font-weight: 500;
+}
+
+.zk-refresh-btn {
+	padding: 5px 10px;
+	cursor: pointer;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	border-radius: 4px;
+	color: var(--text-normal);
+}
+
+.zk-refresh-btn:hover {
+	background: var(--interactive-hover);
+}
+
+/* 列表容器 */
+.zk-list-container {
+	flex: 1;
+	overflow-y: auto;
+	
+}
+
+.zk-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+/* 笔记项 */
+.zk-item {
+	position: relative;
+	margin: 0;
+	padding: 2px 8px;
+	border-left: 2px solid transparent;
+	transition: all 0.2s ease;
+}
+
+.zk-item:hover {
+	background: var(--background-modifier-hover);
+	border-left-color: var(--interactive-accent);
+}
+
+/* 拖放时的视觉反馈 */
+.zk-item-dragging {
+	opacity: 0.5;
+}
+
+.zk-item-dragover {
+	background: rgba(var(--interactive-accent-rgb), 0.15) !important;
+	border-left-color: var(--interactive-accent) !important;
+	border-left-width: 3px !important;
+}
+
+.zk-item-content {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	cursor: pointer;
+	user-select: none;
+}
+
+/* 折叠/展开按钮 */
+.zk-collapse-icon {
+	width: 10px;
+	height: 10px;
+	flex-shrink: 0;
+	cursor: pointer;
+	margin-left: -10px;
+	margin-right: 0px;
+	color: var(--text-muted);
+	transition: transform 0.1s ease, color 0.15s ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.zk-collapse-icon svg {
+	width: 10px;
+	height: 10px;
+}
+
+.zk-collapse-icon.is-collapsed {
+	transform: rotate(-90deg);
+}
+
+.zk-collapse-icon:hover {
+	color: var(--text-accent);
+}
+
+/* ID 显示 */
+.zk-id {
+	font-family: var(--font-monospace);
+	font-size: var(--nav-item-size);
+	font-weight: var(--nav-item-weight);
+	color: var(--text-accent);
+	flex-shrink: 0;
+}
+
+/* 标题显示 */
+.zk-title {
+	color: var(--text-normal);
+	font-size: var(--nav-item-size);
+	font-weight: var(--nav-item-weight);
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+
+}
+
+.zk-item:hover .zk-title {
+	color: var(--text-accent);
+}
+
+/* 操作按钮容器 */
+.zk-actions {
+	position: absolute;
+	right: 4px;
+	top: 50%;
+	transform: translateY(-50%);
+	display: none;
+	gap: 2px;
+	background: var(--background-primary);
+	padding: 2px;
+	border-radius: 4px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.zk-item:hover .zk-actions {
+	display: flex;
+}
+
+.zk-action-btn {
+	padding: 1px 4px;
+	font-size: 11px;
+	line-height: 1;
+	cursor: pointer;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	border-radius: 2px;
+	color: var(--text-muted);
+	transition: all 0.15s ease;
+}
+
+.zk-action-btn:hover {
+	background: var(--interactive-hover);
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
+}
+
+/* 层级缩进线 */
+.zk-item::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--background-modifier-border);
+	opacity: 0.3;
+}
+
+/* 当前打开文件高亮 */
+.zk-item-active {
+	background: var(--background-modifier-hover);
+	border-left-color: var(--interactive-accent) !important;
+}
+
+.zk-item-active .zk-title {
+	color: var(--interactive-accent);
+	
+}
+
+/* 最近打开的文件（蓝色边框） */
+.zk-item-recent {
+	background: rgba(68, 138, 255, 0.08);
+	border-left-color: #448aff !important;
+	border-left-width: 2px !important;
+}
+
+.zk-item-recent .zk-title {
+	color: var(--text-muted);
+	opacity: 0.85;
+}
+
+/* hover状态覆盖最近文件的蓝色边框 */
+.zk-item-recent:hover {
+	border-left-color: var(--interactive-accent) !important;
+}
+
+/* 模态框按钮容器 */
+.modal-button-container {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.modal-button-container button {
+	padding: 6px 16px;
+	cursor: pointer;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+}
+
+.modal-button-container button:hover {
+	background: var(--interactive-hover);
+}
+
+.modal-button-container button.mod-cta {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+}
+
+.modal-button-container button.mod-cta:hover {
+	background: var(--interactive-accent-hover);
+}
+
+/* 输入框样式 */
+.modal input[type="text"] {
+	width: 100%;
+	padding: 8px;
+	margin: 10px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: 14px;
+}
+
+.modal input[type="text"]:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+}
+
+/* 滚动条样式 */
+.zk-list-container::-webkit-scrollbar {
+	width: 8px;
+}
+
+.zk-list-container::-webkit-scrollbar-track {
+	background: var(--background-primary);
+}
+
+.zk-list-container::-webkit-scrollbar-thumb {
+	background: var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.zk-list-container::-webkit-scrollbar-thumb:hover {
+	background: var(--text-muted);
+}
+
+/* 空状态 */
+.zk-empty {
+	padding: 40px 20px;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+	.zk-id {
+		font-size: 0.85em;
+	}
+	
+	.zk-action-btn {
+		padding: 2px 4px;
+		font-size: 12px;
+	}
+}
