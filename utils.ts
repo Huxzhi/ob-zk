@@ -1,9 +1,9 @@
+import * as exp from 'constants'
+
 export interface ZettelId {
   id: string // 完整ID，如 "1a2" 或 "1a2.1"
-  parts: string[] // ID的各个部分，如 ["1", "a", "2"] 或 ["1", "a", "2", ".", "1"]
+  parts: string[] // ID的各个部分，如 ["1", "a", "2"] 或 ["1", "a", "2", "1"]
   level: number // 层级深度
-  numeric: number[] // 数字部分用于排序
-  alpha: string[] // 字母部分用于排序
 }
 
 /**
@@ -31,81 +31,41 @@ export function parseZettelId(filename: string): ZettelId | null {
 
   const id = match[1]
 
-  // 分解ID为各个组成部分
+  // 分解ID为各个组成部分（小数点只是分隔符，不作为独立部分）
   const parts: string[] = []
-  const numeric: number[] = []
-  const alpha: string[] = []
 
-  // 处理点号分隔的部分
-  const segments = id.split('.')
+  // 使用正则分解整个ID，忽略点号
+  // 连续字母作为一组，连续数字作为一组
+  // 例如 "a1.1" 分解为 ["a", "1", "1"]
+  // 例如 "aa1bb2" 分解为 ["aa", "1", "bb", "2"]
+  const idPattern = /([a-z]+|\d+)/g
+  let idMatch
 
-  for (const segment of segments) {
-    // 使用正则分解每个段
-    // 例如 "a1b2" 分解为 ["a", "1", "b", "2"]
-    const segmentPattern = /([a-z]|\d+)/g
-    let segmentMatch
-
-    while ((segmentMatch = segmentPattern.exec(segment)) !== null) {
-      const part = segmentMatch[1]
-      parts.push(part)
-
-      if (/\d+/.test(part)) {
-        numeric.push(parseInt(part))
-        alpha.push('')
-      } else {
-        alpha.push(part)
-      }
-    }
-
-    // 如果不是最后一个段，添加点号
-    if (segments.indexOf(segment) < segments.length - 1) {
-      parts.push('.')
-    }
+  while ((idMatch = idPattern.exec(id)) !== null) {
+    parts.push(idMatch[1])
   }
 
-  // 计算层级：
-  // - 顶层 (a, b): level = 0
-  // - 第一层 (a1, a2): level = 1 (字母→数字，切换1次)
-  // - a1.1: level = 2 (字母→数字→小数点，2次切换)
-  // - a1a: level = 2 (字母→数字→字母，2次切换)
-  // - a1a2: level = 3 (字母→数字→字母→数字，3次切换)
-  // 规则: 数字和字母切换增加层级，小数点也增加层级
-  let level = 0
-  let lastType = 'letter' // 'letter' 或 'digit'
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]
-
-    if (part === '.') {
-      // 遇到小数点，层级+1
-      level++
-      continue
-    }
-
-    if (/\d+/.test(part)) {
-      // 数字部分
-      if (lastType === 'letter') {
-        // 从字母切换到数字，层级+1
-        level++
-      }
-      lastType = 'digit'
-    } else {
-      // 字母部分
-      if (i > 0 && lastType === 'digit') {
-        // 从数字切换到字母，层级+1
-        level++
-      }
-      lastType = 'letter'
-    }
-  }
+  // 计算层级：根据分解后的数组长度
+  // - 顶层 (a, b): parts = [a], level = 0
+  // - 第一层 (a1, a1.1): parts = [a, 1] 或 [a, 1, 1], level = 1 或 2
+  // - 第二层 (a1a): parts = [a, 1, a], level = 2
+  // - 第三层 (a1a2): parts = [a, 1, a, 2], level = 3
+  // 规则: level = parts.length - 1
+  const level = parts.length - 1
 
   return {
     id,
     parts,
     level: Math.max(0, level),
-    numeric,
-    alpha,
   }
+}
+
+/**
+ * 判断 part 是否为数字（检查首字符，性能最优）
+ */
+export function isDigitPart(part: string): boolean {
+  const firstChar = part.charCodeAt(0)
+  return firstChar >= 48 && firstChar <= 57 // '0' = 48, '9' = 57
 }
 
 /**
@@ -119,13 +79,11 @@ export function compareZettelIds(a: ZettelId, b: ZettelId): number {
     const partA = a.parts[i]
     const partB = b.parts[i]
 
-    // 点号处理：点号优先（排在前面）
-    if (partA === '.' && partB === '.') continue
-    if (partA === '.') return -1 // A是点号，排在前面
-    if (partB === '.') return 1 // B是点号，排在前面
+    const isDigitA = isDigitPart(partA)
+    const isDigitB = isDigitPart(partB)
 
     // 数字比较
-    if (/^\d+$/.test(partA) && /^\d+$/.test(partB)) {
+    if (isDigitA && isDigitB) {
       const numA = parseInt(partA)
       const numB = parseInt(partB)
       if (numA !== numB) {
@@ -135,7 +93,7 @@ export function compareZettelIds(a: ZettelId, b: ZettelId): number {
     }
 
     // 字母比较
-    if (/^[a-z]$/.test(partA) && /^[a-z]$/.test(partB)) {
+    if (!isDigitA && !isDigitB) {
       if (partA !== partB) {
         return partA.localeCompare(partB)
       }
@@ -143,16 +101,61 @@ export function compareZettelIds(a: ZettelId, b: ZettelId): number {
     }
 
     // 混合类型：数字优先于字母
-    if (/^\d+$/.test(partA) && /^[a-z]$/.test(partB)) {
+    if (isDigitA && !isDigitB) {
       return -1
     }
-    if (/^[a-z]$/.test(partA) && /^\d+$/.test(partB)) {
+    if (!isDigitA && isDigitB) {
       return 1
     }
   }
 
   // 如果所有部分都相同，较短的排在前面
   return a.parts.length - b.parts.length
+}
+
+/**
+ * 获取下一个字母序列
+ * a -> b, z -> aa, az -> ba, zz -> aaa
+ */
+export function getNextLetterSequence(letters: string): string | null {
+  const chars = letters.split('')
+
+  // 从最后一位开始递增
+  for (let i = chars.length - 1; i >= 0; i--) {
+    if (chars[i] < 'z') {
+      // 当前位可以递增
+      chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1)
+      return chars.join('')
+    } else {
+      // 当前位是 z，需要进位
+      chars[i] = 'a'
+    }
+  }
+
+  // 所有位都是 z，需要增加一位
+  return 'a'.repeat(letters.length + 1)
+}
+
+/**
+ * 智能拼接 parts 数组，相邻同类型元素间添加小数点
+ * 使用数组 join 避免多次字符串拼接
+ */
+export function joinParts(parts: string[]): string {
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0]
+
+  const segments: string[] = [parts[0]]
+  for (let i = 1; i < parts.length; i++) {
+    const prevIsDigit = isDigitPart(parts[i - 1])
+    const currIsDigit = isDigitPart(parts[i])
+
+    // 如果相邻都是数字或都是字母，添加小数点
+    if (prevIsDigit === currIsDigit) {
+      segments.push('.')
+    }
+    segments.push(parts[i])
+  }
+  return segments.join('')
 }
 
 /**
@@ -182,49 +185,5 @@ export function getParentId(id: string): string | null {
   const parentParts = [...parsed.parts]
   parentParts.pop()
 
-  // 如果最后是点号，也移除
-  if (parentParts[parentParts.length - 1] === '.') {
-    parentParts.pop()
-  }
-
-  return parentParts.join('')
-}
-
-/**
- * 检查是否为有效的卢曼ID
- */
-export function isValidZettelId(id: string): boolean {
-  return parseZettelId(id) !== null
-}
-
-/**
- * 生成下一个兄弟笔记ID
- */
-export function getNextSiblingId(id: string): string | null {
-  const parsed = parseZettelId(id)
-  if (!parsed || parsed.parts.length === 0) {
-    return null
-  }
-
-  const lastPart = parsed.parts[parsed.parts.length - 1]
-
-  // 如果最后是数字
-  if (/^\d+$/.test(lastPart)) {
-    const num = parseInt(lastPart)
-    const newParts = [...parsed.parts]
-    newParts[newParts.length - 1] = (num + 1).toString()
-    return newParts.join('')
-  }
-
-  // 如果最后是字母
-  if (/^[a-z]$/.test(lastPart)) {
-    const nextChar = String.fromCharCode(lastPart.charCodeAt(0) + 1)
-    if (nextChar <= 'z') {
-      const newParts = [...parsed.parts]
-      newParts[newParts.length - 1] = nextChar
-      return newParts.join('')
-    }
-  }
-
-  return null
+  return joinParts(parentParts)
 }

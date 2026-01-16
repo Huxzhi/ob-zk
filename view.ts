@@ -1,14 +1,32 @@
 import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from 'obsidian'
 import type ZettelkastenPlugin from './main'
-import { parseZettelId, sortZettels, type ZettelId } from './utils'
+import {
+  compareZettelIds,
+  getNextLetterSequence,
+  isDigitPart,
+  joinParts,
+  parseZettelId,
+  type ZettelId,
+} from './utils'
 
 export const VIEW_TYPE_ZETTELKASTEN = 'zettelkasten-navigator-view'
+
+interface ZettelNode {
+  file: TFile | null // 允许为 null，表示占位节点
+  parsed: ZettelId
+}
+
+interface ZettelNested {
+  pre: string
+  children: ZettelNested[]
+}
 
 export class ZettelkastenView extends ItemView {
   plugin: ZettelkastenPlugin
   recentFiles: string[] = [] // 存储最近打开的3个文件路径
   collapsedIds: Set<string> // 存储折叠的条目ID
-
+  private zettelCache: ZettelNode[] | null = null // 缓存显示条目
+  private ZettelNestedCache: ZettelNested[] | null = null // 缓存嵌套结构
   constructor(leaf: WorkspaceLeaf, plugin: ZettelkastenPlugin) {
     super(leaf)
     this.plugin = plugin
@@ -68,27 +86,19 @@ export class ZettelkastenView extends ItemView {
 
     listContainer.empty()
 
-    // 获取所有markdown文件
-    const files = this.app.vault.getMarkdownFiles()
+    // 清除缓存并重新构建
+    this.zettelCache = null
 
-    // 解析并排序
-    const zettels = files
-      .map((file) => ({
-        file,
-        parsed: parseZettelId(file.basename),
-      }))
-      .filter((z): z is { file: TFile; parsed: ZettelId } => z.parsed !== null)
-
-    const sorted = sortZettels(zettels, this.plugin.settings.sortOrder)
+    this.ZettelNestedCache = null
 
     // 更新笔记计数
     const countEl = this.contentEl.querySelector('.zk-count')
     if (countEl) {
-      countEl.textContent = `笔记: ${sorted.length}`
+      countEl.textContent = `笔记: ${this.getAllZettels().length}`
     }
 
-    // 渲染列表
-    this.renderZettelList(listContainer as HTMLElement, sorted)
+    // 渲染列表（将嵌套结构展开）
+    this.renderZettelList(listContainer as HTMLElement, this.getAllZettels())
   }
 
   renderZettelList(container: HTMLElement, zettels: any[]) {
@@ -372,86 +382,46 @@ export class ZettelkastenView extends ItemView {
     }
   }
 
-  getNextChildId(parentId: string, excludeFile?: TFile): string {
-    // 确定父节点以什么结尾
-    const lastChar = parentId[parentId.length - 1]
-    let baseChildId: string
-
-    if (/[a-z]/.test(lastChar)) {
-      // 父节点以字母结尾，子节点以数字开头
-      baseChildId = parentId + '1'
-    } else {
-      // 父节点以数字结尾，子节点以字母开头
-      baseChildId = parentId + 'a'
-    }
-
-    // 使用 getNextSiblingId 来找到实际的ID，排除指定文件
-    return this.getNextSiblingId(baseChildId, excludeFile) || baseChildId
-  }
-
-  getNextLetterSequence(current: string): string {
-    // 处理字母序列：a -> b -> ... -> z -> aa -> ab -> ... -> az -> ba -> ...
-    let result = current
-    let carry = true
-
-    for (let i = result.length - 1; i >= 0 && carry; i--) {
-      if (result[i] === 'z') {
-        result = result.substring(0, i) + 'a' + result.substring(i + 1)
-      } else {
-        result =
-          result.substring(0, i) +
-          String.fromCharCode(result.charCodeAt(i) + 1) +
-          result.substring(i + 1)
-        carry = false
-      }
-    }
-
-    if (carry) {
-      result = 'a' + result
-    }
-
-    return result
-  }
-
   async indentNote(zettel: any) {
     try {
       const currentFile = zettel.file
       const currentId = zettel.parsed.id
+      const currentParsed = zettel.parsed
 
-      // 获取所有笔记
-      const files = this.app.vault.getMarkdownFiles()
-      const zettels = files
-        .map((file) => ({
-          file,
-          parsed: parseZettelId(file.basename),
-        }))
-        .filter(
-          (z): z is { file: TFile; parsed: ZettelId } => z.parsed !== null,
-        )
+      const nestedZettels = this.getNestedZettels()
 
-      // 排序
-      const sorted = sortZettels(zettels, this.plugin.settings.sortOrder)
+      // 获取父节点的 parts
+      const parentParts = currentParsed.parts.slice(0, -1)
 
-      // 找到当前笔记的位置
-      const currentIndex = sorted.findIndex(
-        (z) => z.file.path === currentFile.path,
-      )
+      // 获取兄弟节点列表
+      let siblings: ZettelNested[]
+      if (parentParts.length === 0) {
+        // 顶层节点
+        siblings = nestedZettels
+      } else {
+        const parentNode = this.findNodeByParts(nestedZettels, parentParts)
+        siblings = parentNode ? parentNode.children : []
+      }
+
+      // 找到当前节点在兄弟节点中的位置
+      const currentLastPart =
+        currentParsed.parts[currentParsed.parts.length - 1]
+      const currentIndex = siblings.findIndex((n) => n.pre === currentLastPart)
+
       if (currentIndex <= 0) {
-        console.log('没有上一个兄弟节点')
+        new Notice('没有兄弟节点')
         return
       }
 
-      // 获取上一个同级节点
-      const prevZettel = sorted[currentIndex - 1]
+      // 获取上一个兄弟节点
+      const prevSibling = siblings[currentIndex - 1]
 
-      // 检查上一个节点是否是同级（层级相同）
-      if (prevZettel.parsed.level !== zettel.parsed.level) {
-        console.log('上一个节点不是同级')
-        return
-      }
+      // 构建上一个兄弟节点的完整 ID
+      const prevSiblingParts = [...parentParts, prevSibling.pre]
+      const prevSiblingId = joinParts(prevSiblingParts)
 
-      // 生成新ID：作为上一个节点的子节点
-      const newId = this.getNextChildId(prevZettel.parsed.id, currentFile)
+      // 生成新ID：作为上一个兄弟节点的子节点
+      const newId = this.getNextChildId(prevSiblingId, currentId)
       if (!newId) {
         new Notice('❌ 无法生成新ID，缩进失败')
         return
@@ -494,30 +464,20 @@ export class ZettelkastenView extends ItemView {
 
       // 检查是否可以反向缩进（必须至少有一个层级）
       if (currentParsed.level === 0) {
-        console.log('已经是顶层，无法反向缩进')
+        new Notice('已经是顶层，无法反向缩进')
         return
       }
 
-      // 获取父ID（去掉最后一个组件）
-      let parentId = ''
-      const parts = [...currentParsed.parts]
+      const nestedZettels = this.getNestedZettels()
 
-      // 移除最后一个非点号的部分
-      while (parts.length > 0) {
-        const last = parts.pop()
-        if (last !== '.') {
-          break
-        }
-      }
-      parentId = parts.join('')
+      // 获取父节点的 parts（去掉当前节点的最后一个 part）
+      const parentParts = currentParsed.parts.slice(0, -1)
 
-      if (!parentId) {
-        console.log('无法获取父ID')
-        return
-      }
+      // 构建父节点的完整 ID
+      const parentId = joinParts(parentParts)
 
       // 生成新ID：作为父节点的下一个兄弟节点
-      const newId = this.getNextSiblingId(parentId, currentFile)
+      const newId = this.getNextSiblingId(parentId, currentId)
 
       if (!newId) {
         new Notice('❌ 无法生成新ID，反向缩进失败')
@@ -633,7 +593,10 @@ export class ZettelkastenView extends ItemView {
       }
 
       // 生成新的ID（作为目标笔记的子笔记）
-      const newId = this.getNextChildId(targetZettel.parsed.id, draggedFile)
+      const newId = this.getNextChildId(
+        targetZettel.parsed.id,
+        parseZettelId(draggedFile.basename)?.id,
+      )
       if (!newId) {
         new Notice('❌ 无法生成新ID，拖放失败')
         return
@@ -681,90 +644,6 @@ export class ZettelkastenView extends ItemView {
     }
   }
 
-  getNextSiblingId(baseId: string, excludeFile?: TFile): string | null {
-    const parsed = parseZettelId(baseId)
-    if (!parsed) return null
-
-    const files = this.app.vault.getMarkdownFiles()
-
-    // 获取父ID（去掉最后一个组件）
-    let parentId = ''
-    const parts = [...parsed.parts]
-
-    // 移除最后一个非点号的部分
-    while (parts.length > 0) {
-      const last = parts.pop()
-      if (last !== '.') {
-        break
-      }
-    }
-    parentId = parts.join('')
-
-    // 获取最后一个组件的类型
-    const lastPart = parsed.parts[parsed.parts.length - 1]
-    const isNumber = /^\d+$/.test(lastPart)
-
-    if (isNumber) {
-      // 如果最后是数字，找到所有同级文件中最大的数字序号
-      const pattern = new RegExp(`^${this.escapeRegex(parentId)}(\\d+)`)
-
-      let maxNum = 0
-      files.forEach((file) => {
-        // 排除指定的文件
-        if (excludeFile && file.path === excludeFile.path) return
-
-        const fileParsed = parseZettelId(file.basename)
-        if (fileParsed) {
-          const match = fileParsed.id.match(pattern)
-          if (match) {
-            const num = parseInt(match[1])
-            if (num > maxNum) {
-              maxNum = num
-            }
-          }
-        }
-      })
-
-      return parentId + (maxNum + 1)
-    } else {
-      // 如果最后是字母，找到所有同级文件中最大的字母
-      const pattern = new RegExp(
-        `^${this.escapeRegex(parentId)}([a-z])(?:[\\d.]|$)`,
-      )
-
-      let maxChar = ''
-      files.forEach((file) => {
-        // 排除指定的文件
-        if (excludeFile && file.path === excludeFile.path) return
-
-        const fileParsed = parseZettelId(file.basename)
-        if (fileParsed) {
-          const match = fileParsed.id.match(pattern)
-          if (match && match[1]) {
-            if (!maxChar || match[1] > maxChar) {
-              maxChar = match[1]
-            }
-          }
-        }
-      })
-
-      if (!maxChar) {
-        // 没有找到同级的，返回下一个字母
-        const nextChar = String.fromCharCode(lastPart.charCodeAt(0) + 1)
-        if (nextChar <= 'z') {
-          return parentId + nextChar
-        }
-        return null
-      }
-
-      const nextChar = String.fromCharCode(maxChar.charCodeAt(0) + 1)
-      if (nextChar <= 'z') {
-        return parentId + nextChar
-      }
-      return null
-    }
-  }
-
   escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
@@ -779,6 +658,214 @@ export class ZettelkastenView extends ItemView {
     return zettels.some(
       (z) => z.parsed.id.startsWith(parentId) && z.parsed.id !== parentId,
     )
+  }
+
+  /**
+   * 获取所有已解析的卢曼笔记
+   */
+  private getAllZettels(): Array<ZettelNode> {
+    if (!this.zettelCache) {
+      const files = this.app.vault.getMarkdownFiles()
+      this.zettelCache = files
+        .map((file) => ({
+          file,
+          parsed: parseZettelId(file.basename),
+        }))
+        .filter(
+          (z): z is { file: TFile; parsed: ZettelId } => z.parsed !== null,
+        )
+        .sort((a, b) => {
+          return compareZettelIds(a.parsed, b.parsed)
+        })
+    }
+    return this.zettelCache
+  }
+
+  /**
+   * 获取嵌套的树结构（带缓存）
+   * 使用 parts 数组逐层构建树
+   */
+  private getNestedZettels(): ZettelNested[] {
+    if (this.ZettelNestedCache) {
+      return this.ZettelNestedCache
+    }
+
+    const allZettels = this.getAllZettels()
+    const rootNodes: ZettelNested[] = []
+
+    for (const zettel of allZettels) {
+      const parts = zettel.parsed.parts
+      this.insertIntoTree(rootNodes, parts)
+    }
+    this.ZettelNestedCache = rootNodes
+    return rootNodes
+  }
+
+  /**
+   * 将 parts 数组逐层插入到树中
+   * parts[0] = 第一层级（根节点）
+   * parts[1] = 第二层级（第一级子节点）
+   * parts[2] = 第三层级（第二级子节点）
+   * 例如：["a", "1", "a"] 表示 root -> a -> a1 -> a1a
+   */
+  private insertIntoTree(rootNodes: ZettelNested[], parts: string[]): void {
+    let currentLevel = rootNodes
+
+    // 逐层遍历 parts 数组
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+
+      // 在当前层级查找是否已存在该 part
+      let existingNode = currentLevel.find((node) => node.pre === part)
+
+      if (!existingNode) {
+        // 不存在则创建新节点
+        existingNode = {
+          pre: part,
+          children: [],
+        }
+        currentLevel.push(existingNode)
+      }
+
+      // 进入下一层级（该节点的 children）
+      currentLevel = existingNode.children
+    }
+  }
+
+  /**
+   * 从 parts 数组获取父节点ID
+   */
+  private getParentIdFromParts(parts: string[]): string | null {
+    if (parts.length <= 1) {
+      return null
+    }
+    const parentParts = parts.slice(0, -1)
+    return joinParts(parentParts)
+  }
+
+  /**
+   * 在树中根据 parts 路径找到对应节点
+   */
+  private findNodeByParts(
+    rootNodes: ZettelNested[],
+    parts: string[],
+  ): ZettelNested | null {
+    if (parts.length === 0) return null
+
+    let currentLevel = rootNodes
+    let node: ZettelNested | null = null
+
+    for (const part of parts) {
+      node = currentLevel.find((n) => n.pre === part) || null
+      if (!node) return null
+      currentLevel = node.children
+    }
+
+    return node
+  }
+
+  /**
+   * 生成下一个兄弟笔记ID
+   * @param id 当前节点ID
+   * @param excludeId 需要排除的ID（当前文件的ID）
+   */
+  getNextSiblingId(id: string, excludeId: string): string | null {
+    const parsed = parseZettelId(id)
+    if (!parsed || parsed.parts.length === 0) {
+      return null
+    }
+
+    const nestedZettels = this.getNestedZettels()
+
+    // 获取父节点的 parts
+    const parentParts = parsed.parts.slice(0, -1)
+
+    let siblings: ZettelNested[]
+    if (parentParts.length === 0) {
+      // 顶层节点，siblings 就是 rootNodes
+      siblings = nestedZettels
+    } else {
+      // 找到父节点
+      const parentNode = this.findNodeByParts(nestedZettels, parentParts)
+      siblings = parentNode ? parentNode.children : []
+    }
+
+    if (siblings.length === 0) {
+      // 没有兄弟节点，返回当前 ID
+      return id
+    }
+
+    // 找到最后一个兄弟节点（排除 excludeId 对应的节点）
+    const excludeParsed = parseZettelId(excludeId)
+    const excludeLastPart = excludeParsed?.parts[excludeParsed.parts.length - 1]
+
+    const filteredSiblings = siblings.filter((n) => n.pre !== excludeLastPart)
+
+    if (filteredSiblings.length === 0) {
+      // 所有兄弟节点都被排除了，返回当前 ID
+      return id
+    }
+
+    const lastSibling = filteredSiblings[filteredSiblings.length - 1]
+    const lastPart = lastSibling.pre
+
+    // 递增最后一个 part
+    let nextPart: string
+    if (isDigitPart(lastPart)) {
+      const num = parseInt(lastPart)
+      nextPart = (num + 1).toString()
+    } else {
+      const nextLetters = getNextLetterSequence(lastPart)
+      if (!nextLetters) return null
+      nextPart = nextLetters
+    }
+
+    // 构建新 ID
+    const newParts = [...parentParts, nextPart]
+    return joinParts(newParts)
+  }
+
+  getNextChildId(parentId: string, excludeId?: string): string | null {
+    const parsed = parseZettelId(parentId)
+    if (!parsed) {
+      return null
+    }
+
+    const nestedZettels = this.getNestedZettels()
+
+    // 找到父节点
+    const parentNode = this.findNodeByParts(nestedZettels, parsed.parts)
+    let children = parentNode ? parentNode.children : []
+
+    // 如果提供了 excludeId，过滤掉对应的子节点
+    if (excludeId) {
+      const excludeParsed = parseZettelId(excludeId)
+      const excludeLastPart =
+        excludeParsed?.parts[excludeParsed.parts.length - 1]
+      if (excludeLastPart) {
+        children = children.filter((n) => n.pre !== excludeLastPart)
+      }
+    }
+
+    // 如果没有子节点（或全被排除），根据父节点最后一个 part 的类型决定
+    if (children.length === 0) {
+      const lastPart = parsed.parts[parsed.parts.length - 1]
+      const firstChild = isDigitPart(lastPart) ? 'a' : '1'
+      return joinParts([...parsed.parts, firstChild])
+    }
+
+    // 有子节点，递增最后一个子节点
+    const lastChildPart = children[children.length - 1].pre
+    let nextPart: string
+    if (isDigitPart(lastChildPart)) {
+      nextPart = (parseInt(lastChildPart) + 1).toString()
+    } else {
+      const nextLetters = getNextLetterSequence(lastChildPart)
+      if (!nextLetters) return null
+      nextPart = nextLetters
+    }
+
+    return joinParts([...parsed.parts, nextPart])
   }
 
   updateRecentFiles(filePath: string) {
