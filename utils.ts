@@ -1,5 +1,3 @@
-import { ZettelNode } from './view'
-
 export interface ZettelId {
   id: string // 完整ID，如 "1a2" 或 "1a2.1"
   parts: string[] // ID的各个部分，如 ["1", "a", "2"] 或 ["1", "a", "2", "1"]
@@ -21,8 +19,9 @@ export function parseZettelId(filename: string): ZettelId | null {
   const name = filename.replace(/\.md$/, '')
 
   // 匹配卢曼编号模式（支持用-分隔ID和标题）
-  // 支持: a, a1, a1b, a1b2, a1b.1, a1b.1a, a1b2.34-标题 等
-  const pattern = /^([a-z](?:\d+(?:\.\d+)?[a-z]*)*(?:\.\d+)?)(?:-.*)?$/
+  // 支持: a, a1, a1b, a1b2, a1b.1, a.a, a1b.1a, a1b2.34-标题 等
+  // 允许字母、数字、小数点的任意组合，但不允许以点号结尾或连续点号
+  const pattern = /^([a-z](?:[a-z\d]|\.(?=[a-z\d]))*)(?:-.*)?$/
   const match = name.match(pattern)
 
   if (!match || !match[1]) {
