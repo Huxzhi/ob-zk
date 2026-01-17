@@ -3,7 +3,6 @@ import type ZettelkastenPlugin from './main'
 import { RenameModal } from './modal'
 import {
   compareZettelIds,
-  getMaxChild,
   getNextLetterSequence,
   isDigitPart,
   joinParts,
@@ -133,7 +132,7 @@ export class ZettelkastenView extends ItemView {
       }
 
       // 根据层级设置缩进（基础 padding 4px + 层级缩进）
-      li.style.paddingLeft = `${10 + level * 10}px`
+      li.style.paddingLeft = `${level * 10}px`
 
       // 创建项目容器
       const itemContent = li.createDiv({ cls: 'zk-item-content' })
@@ -387,37 +386,42 @@ export class ZettelkastenView extends ItemView {
   private generateChildId(
     allZettels: ZettelNode[],
     parent: ZettelNode,
+    self: ZettelNode | null = null,
   ): string | null {
-    // 特殊处理虚拟顶层节点
-    if (parent.parts.length === 0) {
-      // 找到所有顶层节点(level 0)中的最大节点
-      const topLevelNodes = allZettels.filter((z) => z.level === 0)
+    // 找到父节点的最大直接子节点
+    const targetLevel = parent.level + 1
+    let maxChild: ZettelNode | null = null
 
-      if (topLevelNodes.length > 0) {
-        // 有顶层节点，基于最大的生成下一个
-        const maxTopLevel = topLevelNodes[topLevelNodes.length - 1]
-        const lastPart = maxTopLevel.parts[0]
-        let nextPart: string
-        if (isDigitPart(lastPart)) {
-          nextPart = (parseInt(lastPart) + 1).toString()
-        } else {
-          const nextLetters = getNextLetterSequence(lastPart)
-          if (!nextLetters) {
-            return null
-          }
-          nextPart = nextLetters
-        }
-        return nextPart
-      } else {
-        // 没有任何顶层节点，第一个默认为 'a'
-        return 'a'
+    const parentIndex = allZettels.findIndex(
+      (zettel) => zettel.id === parent.id,
+    )
+    // 确保父节点存在，除非是顶层虚拟节点
+    if (parentIndex === -1 && parent.level !== 0) {
+      return null
+    }
+
+    for (let i = parentIndex + 1; i < allZettels.length; i++) {
+      const candidate = allZettels[i]
+
+      // 如果遇到层级小于等于当前节点的，说明已经离开当前节点的子树
+      if (candidate.level < targetLevel) {
+        break
+      }
+
+      // 只考虑目标层级的节点
+      if (candidate.level > targetLevel) {
+        continue
+      }
+
+      // 检查是否是当前节点的直接子节点
+      const candidateParentId = joinParts(candidate.parts.slice(0, -1))
+      if (candidateParentId === parent.id && candidate.id !== self?.id) {
+        // 因为数组已排序，后面的就是更大的
+        maxChild = candidate
       }
     }
 
-    // 非顶层节点的正常逻辑
-    const maxChild = getMaxChild(allZettels, parent)
-
-    let newParts: string[]
+    // 基于 maxChild 生成新 ID
     if (maxChild) {
       // 有子节点，基于最大子节点生成下一个
       const lastPart = maxChild.parts[maxChild.parts.length - 1]
@@ -431,50 +435,23 @@ export class ZettelkastenView extends ItemView {
         }
         nextPart = nextLetters
       }
-      newParts = [...parent.parts, nextPart]
+
+      // 返回新 ID
+      if (parent.parts.length === 0) {
+        return nextPart
+      } else {
+        return joinParts([...parent.parts, nextPart])
+      }
     } else {
       // 没有子节点，生成第一个子节点
-      const lastPart = parent.parts[parent.parts.length - 1]
-      const firstChildPart = isDigitPart(lastPart) ? 'a' : '1'
-      newParts = [...parent.parts, firstChildPart]
-    }
-
-    return joinParts(newParts)
-  }
-
-  /**
-   * 获取当前节点的上一个兄弟节点
-   */
-  private getPrevSibling(
-    sortedZettels: ZettelNode[],
-    currentNode: ZettelNode,
-  ): ZettelNode | null {
-    const parentId = joinParts(currentNode.parts.slice(0, -1))
-    const currentIndex = sortedZettels.findIndex(
-      (node) => node.id === currentNode.id,
-    )
-
-    if (currentIndex === -1) {
-      return null
-    }
-
-    // 从当前节点之前倒序查找第一个同父同级的兄弟节点
-    for (let i = currentIndex - 1; i >= 0; i--) {
-      const candidate = sortedZettels[i]
-
-      // 只考虑同层级节点
-      if (candidate.level !== currentNode.level) {
-        continue
-      }
-
-      // 检查是否有相同的父节点
-      const candidateParentId = joinParts(candidate.parts.slice(0, -1))
-      if (candidateParentId === parentId) {
-        return candidate
+      if (parent.parts.length === 0) {
+        return 'a'
+      } else {
+        const lastPart = parent.parts[parent.parts.length - 1]
+        const firstChildPart = isDigitPart(lastPart) ? 'a' : '1'
+        return joinParts([...parent.parts, firstChildPart])
       }
     }
-
-    return null
   }
 
   async indentNote(zettel: ZettelNode) {
@@ -482,14 +459,18 @@ export class ZettelkastenView extends ItemView {
       const allZettels = this.getAllZettels()
 
       // 找到上一个兄弟节点
-      const prevSibling = this.getPrevSibling(allZettels, zettel)
-      if (!prevSibling) {
+      const currentIndex = allZettels.findIndex((z) => z.id === zettel.id)
+      if (currentIndex <= 0) {
         new Notice('没有上一个兄弟节点')
         return
       }
 
       // 生成作为上一个兄弟节点的子节点 ID
-      const newId = this.generateChildId(allZettels, prevSibling)
+      const newId = this.generateChildId(
+        allZettels,
+        allZettels[currentIndex - 1],
+        zettel,
+      )
       if (!newId) {
         new Notice('❌ 无法生成新ID，缩进失败')
         return
@@ -504,7 +485,7 @@ export class ZettelkastenView extends ItemView {
   async outdentNote(zettel: ZettelNode) {
     try {
       // 检查是否可以反向缩进（必须至少有一个层级）
-      if (zettel.level === 0) {
+      if (zettel.level === 1) {
         new Notice('已经是顶层，无法反向缩进')
         return
       }
@@ -525,7 +506,7 @@ export class ZettelkastenView extends ItemView {
           file: null as any,
           id: '',
           parts: [],
-          level: -1,
+          level: 0,
         }
       }
 

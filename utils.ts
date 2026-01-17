@@ -46,17 +46,15 @@ export function parseZettelId(filename: string): ZettelId | null {
   }
 
   // 计算层级：根据分解后的数组长度
-  // - 顶层 (a, b): parts = [a], level = 0
+  // - 顶层 (a, b): parts = [a], level = 1
   // - 第一层 (a1, a1.1): parts = [a, 1] 或 [a, 1, 1], level = 1 或 2
-  // - 第二层 (a1a): parts = [a, 1, a], level = 2
-  // - 第三层 (a1a2): parts = [a, 1, a, 2], level = 3
-  // 规则: level = parts.length - 1
-  const level = parts.length - 1
+  // - 第二层 (a1a): parts = [a, 1, a], level = 3
+  // - 第三层 (a1a2): parts = [a, 1, a, 2], level = 4
 
   return {
     id,
     parts,
-    level: Math.max(0, level),
+    level: parts.length,
   }
 }
 
@@ -164,45 +162,3 @@ export function joinParts(parts: string[]): string {
  * @param currentNode - 当前节点
  * @returns 当前节点的最大子节点，如果没有则返回 null
  */
-export function getMaxChild(
-  sortedZettelNodes: ZettelNode[],
-  currentNode: ZettelNode,
-): ZettelNode | null {
-  const targetLevel = currentNode.level + 1
-  const currentId = joinParts(currentNode.parts)
-  const currentLevel = currentNode.level
-  let maxChild: ZettelNode | null = null
-
-  // 找到当前节点在数组中的位置
-  const currentIndex = sortedZettelNodes.findIndex(
-    (node) => joinParts(node.parts) === currentId,
-  )
-
-  if (currentIndex === -1) {
-    return null
-  }
-
-  // 从当前节点之后开始遍历
-  for (let i = currentIndex + 1; i < sortedZettelNodes.length; i++) {
-    const candidate = sortedZettelNodes[i]
-
-    // 如果遇到层级小于等于当前节点的，说明已经离开当前节点的子树
-    if (candidate.level <= currentLevel) {
-      break
-    }
-
-    // 只考虑目标层级的节点
-    if (candidate.level !== targetLevel) {
-      continue
-    }
-
-    // 检查是否是当前节点的直接子节点
-    const candidateParentId = joinParts(candidate.parts.slice(0, -1))
-    if (candidateParentId === currentId) {
-      // 因为数组已排序，后面的就是更大的
-      maxChild = candidate
-    }
-  }
-
-  return maxChild
-}
