@@ -1,4 +1,4 @@
-import * as exp from 'constants'
+import { ZettelNode } from './view'
 
 export interface ZettelId {
   id: string // 完整ID，如 "1a2" 或 "1a2.1"
@@ -72,12 +72,12 @@ export function isDigitPart(part: string): boolean {
  * 比较两个卢曼ID
  * 返回: -1 如果 a < b, 0 如果 a == b, 1 如果 a > b
  */
-export function compareZettelIds(a: ZettelId, b: ZettelId): number {
-  const minLength = Math.min(a.parts.length, b.parts.length)
+export function compareZettelIds(a: string[], b: string[]): number {
+  const minLength = Math.min(a.length, b.length)
 
   for (let i = 0; i < minLength; i++) {
-    const partA = a.parts[i]
-    const partB = b.parts[i]
+    const partA = a[i]
+    const partB = b[i]
 
     const isDigitA = isDigitPart(partA)
     const isDigitB = isDigitPart(partB)
@@ -110,7 +110,7 @@ export function compareZettelIds(a: ZettelId, b: ZettelId): number {
   }
 
   // 如果所有部分都相同，较短的排在前面
-  return a.parts.length - b.parts.length
+  return a.length - b.length
 }
 
 /**
@@ -159,31 +159,50 @@ export function joinParts(parts: string[]): string {
 }
 
 /**
- * 对卢曼笔记进行排序
+ * 从排序后的节点数组中获取当前节点的最大直接子节点
+ * @param sortedZettelNodes - 已排序的节点数组
+ * @param currentNode - 当前节点
+ * @returns 当前节点的最大子节点，如果没有则返回 null
  */
-export function sortZettels(
-  zettels: Array<{ file: any; parsed: ZettelId }>,
-  order: 'asc' | 'desc' = 'asc',
-): Array<{ file: any; parsed: ZettelId }> {
-  const sorted = [...zettels].sort((a, b) => {
-    return compareZettelIds(a.parsed, b.parsed)
-  })
+export function getMaxChild(
+  sortedZettelNodes: ZettelNode[],
+  currentNode: ZettelNode,
+): ZettelNode | null {
+  const targetLevel = currentNode.level + 1
+  const currentId = joinParts(currentNode.parts)
+  const currentLevel = currentNode.level
+  let maxChild: ZettelNode | null = null
 
-  return order === 'desc' ? sorted.reverse() : sorted
-}
+  // 找到当前节点在数组中的位置
+  const currentIndex = sortedZettelNodes.findIndex(
+    (node) => joinParts(node.parts) === currentId,
+  )
 
-/**
- * 获取父笔记ID
- */
-export function getParentId(id: string): string | null {
-  const parsed = parseZettelId(id)
-  if (!parsed || parsed.parts.length <= 1) {
+  if (currentIndex === -1) {
     return null
   }
 
-  // 移除最后一个字母或数字
-  const parentParts = [...parsed.parts]
-  parentParts.pop()
+  // 从当前节点之后开始遍历
+  for (let i = currentIndex + 1; i < sortedZettelNodes.length; i++) {
+    const candidate = sortedZettelNodes[i]
 
-  return joinParts(parentParts)
+    // 如果遇到层级小于等于当前节点的，说明已经离开当前节点的子树
+    if (candidate.level <= currentLevel) {
+      break
+    }
+
+    // 只考虑目标层级的节点
+    if (candidate.level !== targetLevel) {
+      continue
+    }
+
+    // 检查是否是当前节点的直接子节点
+    const candidateParentId = joinParts(candidate.parts.slice(0, -1))
+    if (candidateParentId === currentId) {
+      // 因为数组已排序，后面的就是更大的
+      maxChild = candidate
+    }
+  }
+
+  return maxChild
 }
