@@ -61,18 +61,40 @@ export class ZettelkastenView extends ItemView {
     // 初始渲染
     await this.refresh()
 
-    // 监听文件变化
-    this.registerEvent(this.app.vault.on('create', () => this.refresh()))
-    this.registerEvent(this.app.vault.on('delete', () => this.refresh()))
-    this.registerEvent(this.app.vault.on('rename', () => this.refresh()))
+    // 监听文件变化 - 只在卢曼笔记变化时刷新
+    this.registerEvent(
+      this.app.vault.on('create', (file) => {
+        if (this.isZettelFile(file)) {
+          this.refresh()
+        }
+      }),
+    )
+    this.registerEvent(
+      this.app.vault.on('delete', (file) => {
+        if (this.isZettelFile(file)) {
+          this.refresh()
+        }
+      }),
+    )
+    this.registerEvent(
+      this.app.vault.on('rename', (file, oldPath) => {
+        // 检查新旧文件名是否有一个符合卢曼格式
+        const oldBasename = oldPath.split('/').pop()?.replace(/\.md$/, '') || ''
+        const isOldZettel = parseZettelId(oldBasename) !== null
+        const isNewZettel = this.isZettelFile(file)
+        if (isOldZettel || isNewZettel) {
+          this.refresh()
+        }
+      }),
+    )
 
-    // 监听文件打开事件以更新高亮和最近文件列表
+    // 监听文件打开事件 - 只更新高亮样式，不刷新列表
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (file) {
           this.updateRecentFiles(file.path)
+          this.updateHighlight()
         }
-        this.refresh()
       }),
     )
   }
@@ -122,6 +144,8 @@ export class ZettelkastenView extends ItemView {
       }
 
       const li = ul.createEl('li', { cls: 'zk-item' })
+      // 存储文件路径以便后续更新高亮
+      li.setAttribute('data-file-path', zettel.file.path)
 
       // 如果是当前打开的文件，添加高亮样式
       if (activeFile && zettel.file?.path === activeFile.path) {
@@ -204,8 +228,7 @@ export class ZettelkastenView extends ItemView {
         const leaf = this.app.workspace.getMostRecentLeaf()
         if (leaf) {
           await leaf.openFile(zettel.file)
-          // 文件打开后刷新视图以更新所有样式
-          await this.refresh()
+          // 文件打开后不需要刷新，file-open事件会自动更新高亮
         }
       }
 
@@ -218,15 +241,24 @@ export class ZettelkastenView extends ItemView {
       // 拖放功能：设置为可拖动
       li.setAttribute('draggable', 'true')
 
-      // dragstart: 开始拖动时，记录被拖动的文件路径
+      // dragstart: 开始拖动时，记录被拖动的文件路径和双链格式
       li.addEventListener('dragstart', (e) => {
         if (e.dataTransfer) {
-          e.dataTransfer.effectAllowed = 'move'
-          e.dataTransfer.setData('text/plain', zettel.file.path)
+          e.dataTransfer.effectAllowed = 'copyMove'
+
+          // 生成双链文本 [[文件名]]
+          const fileName = zettel.file.basename
+          const wikiLink = `[[${fileName}]]`
+
+          // 设置文本格式（拖到编辑器时使用）
+          e.dataTransfer.setData('text/plain', wikiLink)
+
+          // 设置Obsidian内部格式（拖到列表中重排序时使用）
           e.dataTransfer.setData(
             'application/x-obsidian-file-path',
             zettel.file.path,
           )
+
           li.addClass('zk-item-dragging')
         }
       })
@@ -548,7 +580,7 @@ export class ZettelkastenView extends ItemView {
     )
 
     // 重命名文件
-    await this.app.vault.rename(currentFile, newPath)
+    await this.app.fileManager.renameFile(currentFile, newPath)
 
     // 刷新视图
     await this.refresh()
@@ -570,7 +602,8 @@ export class ZettelkastenView extends ItemView {
         if (newName && newName !== currentName) {
           try {
             const newPath = file.path.replace(file.name, `${newName}.md`)
-            await this.app.vault.rename(file, newPath)
+            // 禁用自动链接更新
+            await this.app.fileManager.renameFile(file, newPath, false)
             await this.refresh()
           } catch (error) {
             console.error('重命名失败:', error)
@@ -674,8 +707,8 @@ export class ZettelkastenView extends ItemView {
         ? `${targetFolder}/${newBasename}.md`
         : `${newBasename}.md`
 
-      // 重命名并移动文件
-      await this.app.vault.rename(draggedFile, newPath)
+      // 重命名并移动文件（禁用自动链接更新）
+      await this.app.fileManager.renameFile(draggedFile, newPath, false)
 
       // 刷新视图
       await this.refresh()
@@ -684,6 +717,42 @@ export class ZettelkastenView extends ItemView {
     } catch (error) {
       console.error('拖放处理失败:', error)
     }
+  }
+
+  /**
+   * 检查文件是否是卢曼笔记（符合ID格式）
+   */
+  private isZettelFile(file: any): boolean {
+    if (!file || typeof file.basename !== 'string') return false
+    const parsed = parseZettelId(file.basename)
+    return parsed !== null
+  }
+
+  /**
+   * 更新列表项的高亮状态（不刷新整个列表）
+   */
+  private updateHighlight() {
+    const listContainer = this.contentEl.querySelector('.zk-list-container')
+    if (!listContainer) return
+
+    const activeFile = this.app.workspace.getActiveFile()
+    const allItems = listContainer.querySelectorAll('.zk-item')
+
+    allItems.forEach((item) => {
+      const li = item as HTMLElement
+      const filePath = li.getAttribute('data-file-path')
+
+      // 移除所有高亮样式
+      li.removeClass('zk-item-active')
+      li.removeClass('zk-item-recent')
+
+      // 添加对应的高亮样式
+      if (activeFile && filePath === activeFile.path) {
+        li.addClass('zk-item-active')
+      } else if (filePath && this.recentFiles.includes(filePath)) {
+        li.addClass('zk-item-recent')
+      }
+    })
   }
 
   escapeRegex(str: string): string {
