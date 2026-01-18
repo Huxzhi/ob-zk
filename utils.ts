@@ -91,9 +91,13 @@ export function compareZettelIds(a: string[], b: string[]): number {
 
     // 字母比较
     if (!isDigitA && !isDigitB) {
-      if (partA !== partB) {
-        return partA.localeCompare(partB)
+      // 长度长的排后（如 aa > z）
+      if (partA.length !== partB.length) {
+        return partA.length - partB.length
       }
+      // 字典序比较
+      const cmp = partA.localeCompare(partB)
+
       continue
     }
 
