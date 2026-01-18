@@ -423,7 +423,7 @@ export class ZettelkastenView extends ItemView {
     // 找到父节点的最大直接子节点
     const targetLevel = parent.level + 1
     let maxChild: ZettelNode | null = null
-
+    parent.id = joinParts(parent.parts) // 确保 parent.id 正确
     const parentIndex = allZettels.findIndex(
       (zettel) => zettel.id === parent.id,
     )
@@ -503,6 +503,12 @@ export class ZettelkastenView extends ItemView {
         allZettels[currentIndex - 1],
         zettel,
       )
+
+      if (newId === zettel.id) {
+        new Notice('❌ 新ID与当前ID相同，缩进失败')
+        return
+      }
+
       if (!newId) {
         new Notice('❌ 无法生成新ID，缩进失败')
         return
@@ -524,34 +530,30 @@ export class ZettelkastenView extends ItemView {
 
       const allZettels = this.getAllZettels()
 
-      // 构造祖父节点（父节点的父节点）
-      const grandparentParts = zettel.parts.slice(0, -2)
-      let grandparent: ZettelNode | null = null
+      // 从祖父节点开始尝试，如果无法生成新ID，就继续往上一层
+      let parentParts = zettel.parts.slice(0, -2)
+      let newId: string | null = null
 
-      if (grandparentParts.length > 0) {
-        // 找到实际的祖父节点
-        const grandparentId = joinParts(grandparentParts)
-        grandparent = allZettels.find((z) => z.id === grandparentId) || null
-      } else {
-        // 父节点是顶层，构造虚拟顶层节点
-        grandparent = {
+      while (newId === null) {
+        // 构造虚拟父节点
+        const parentNode: ZettelNode = {
           file: null as any,
-          id: '',
-          parts: [],
-          level: 0,
+          id: joinParts(parentParts),
+          parts: parentParts,
+          level: parentParts.length,
         }
-      }
 
-      if (!grandparent) {
-        new Notice('❌ 找不到父级节点')
-        return
-      }
+        // 尝试生成新ID
+        newId = this.generateChildId(allZettels, parentNode)
 
-      // 生成祖父节点的下一个子节点 ID（即父节点的下一个兄弟）
-      const newId = this.generateChildId(allZettels, grandparent)
-      if (!newId) {
-        new Notice('❌ 无法生成新ID，反向缩进失败')
-        return
+        // 如果生成失败且还未到达顶层，继续往上一层
+        if (newId === null && parentParts.length > 0) {
+          parentParts = parentParts.slice(0, -1)
+        } else if (newId === null && parentParts.length === 0) {
+          // 已经到达顶层仍无法生成
+          new Notice('❌ 无法生成新ID，反向缩进失败')
+          return
+        }
       }
 
       this.renameId(zettel, newId)
