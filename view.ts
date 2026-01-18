@@ -23,6 +23,7 @@ export class ZettelkastenView extends ItemView {
   recentFiles: string[] = [] // 存储最近打开的3个文件路径
   collapsedIds: Set<string> // 存储折叠的条目ID
   private zettelCache: ZettelNode[] | null = null // 缓存显示条目
+  private activeItemPath: string | null = null // 当前激活的条目路径
 
   constructor(leaf: WorkspaceLeaf, plugin: ZettelkastenPlugin) {
     super(leaf)
@@ -92,7 +93,7 @@ export class ZettelkastenView extends ItemView {
     this.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (file) {
-          this.updateRecentFiles(file.path)
+          this.activeItemPath = file.path
           this.updateHighlight()
         }
       }),
@@ -221,8 +222,15 @@ export class ZettelkastenView extends ItemView {
           return
         }
 
-        // 更新最近文件列表
+        // 立即设置高亮
+        this.setActiveItem(li)
+        this.activeItemPath = zettel.file.path
+
+        // 立即保存到最近文件列表
         this.updateRecentFiles(zettel.file.path)
+
+        // 更新所有高亮样式
+        this.updateHighlight()
 
         // 获取最近使用的主编辑区leaf，而不是当前侧边栏的leaf
         const leaf = this.app.workspace.getMostRecentLeaf()
@@ -731,13 +739,31 @@ export class ZettelkastenView extends ItemView {
   }
 
   /**
+   * 立即设置指定条目的活跃高亮
+   */
+  private setActiveItem(activeLi: HTMLElement) {
+    const listContainer = this.contentEl.querySelector('.zk-list-container')
+    if (!listContainer) return
+
+    const allItems = listContainer.querySelectorAll('.zk-item')
+
+    allItems.forEach((item) => {
+      const li = item as HTMLElement
+      // 移除活跃高亮，但保留最近文件高亮
+      li.removeClass('zk-item-active')
+    })
+
+    // 给指定条目添加活跃高亮
+    activeLi.addClass('zk-item-active')
+  }
+
+  /**
    * 更新列表项的高亮状态（不刷新整个列表）
    */
   private updateHighlight() {
     const listContainer = this.contentEl.querySelector('.zk-list-container')
     if (!listContainer) return
 
-    const activeFile = this.app.workspace.getActiveFile()
     const allItems = listContainer.querySelectorAll('.zk-item')
 
     allItems.forEach((item) => {
@@ -749,7 +775,7 @@ export class ZettelkastenView extends ItemView {
       li.removeClass('zk-item-recent')
 
       // 添加对应的高亮样式
-      if (activeFile && filePath === activeFile.path) {
+      if (this.activeItemPath && filePath === this.activeItemPath) {
         li.addClass('zk-item-active')
       } else if (filePath && this.recentFiles.includes(filePath)) {
         li.addClass('zk-item-recent')

@@ -74,7 +74,7 @@
 
 .zk-item-content {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	gap: 2px;
 	cursor: pointer;
 	user-select: none;
@@ -82,22 +82,23 @@
 
 /* 折叠/展开按钮 */
 .zk-collapse-icon {
-	width: 10px;
-	height: 10px;
+	width: 8px;
+	height: 8px;
 	flex-shrink: 0;
 	cursor: pointer;
-	margin-left: -10px;
+	margin-left: -11px;
 	margin-right: 0px;
 	color: var(--text-muted);
 	transition: transform 0.1s ease, color 0.15s ease;
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	align-self: center; /* 在条目中居中 */
 }
 
 .zk-collapse-icon svg {
-	width: 10px;
-	height: 10px;
+	width: 8px;
+	height: 8px;
 }
 
 .zk-collapse-icon.is-collapsed {
@@ -115,6 +116,8 @@
 	font-weight: var(--nav-item-weight);
 	color: var(--text-accent);
 	flex-shrink: 0;
+	align-self: flex-start; /* ID在条目的偏上方 */
+	margin-top: 1px; /* 微调位置 */
 }
 
 /* 标题显示 */
@@ -173,17 +176,7 @@
 	border-color: var(--interactive-accent);
 }
 
-/* 层级缩进线 */
-.zk-item::before {
-	content: '';
-	position: absolute;
-	left: 0;
-	top: 0;
-	bottom: 0;
-	width: 2px;
-	background: var(--background-modifier-border);
-	opacity: 0.3;
-}
+
 
 /* 当前打开文件高亮 */
 .zk-item-active {
@@ -198,9 +191,10 @@
 
 /* 最近打开的文件（蓝色边框） */
 .zk-item-recent {
-	background: rgba(68, 138, 255, 0.08);
-	border-left-color: #448aff !important;
-	border-left-width: 2px !important;
+background: var(--background-modifier-hover);
+	border-left-color: #448aff ;
+	border-left-width: 2px ;
+	
 }
 
 .zk-item-recent .zk-title {
@@ -208,9 +202,11 @@
 	opacity: 0.85;
 }
 
+
+
 /* hover状态覆盖最近文件的蓝色边框 */
 .zk-item-recent:hover {
-	border-left-color: var(--interactive-accent) !important;
+	border-left-color: var(--interactive-accent) 
 }
 
 /* 模态框按钮容器 */

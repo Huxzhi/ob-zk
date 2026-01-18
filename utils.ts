@@ -97,7 +97,9 @@ export function compareZettelIds(a: string[], b: string[]): number {
       }
       // 字典序比较
       const cmp = partA.localeCompare(partB)
-
+      if (cmp !== 0) {
+        return cmp
+      }
       continue
     }
 
