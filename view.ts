@@ -602,8 +602,8 @@ export class ZettelkastenView extends ItemView {
         if (newName && newName !== currentName) {
           try {
             const newPath = file.path.replace(file.name, `${newName}.md`)
-            // 禁用自动链接更新
-            await this.app.fileManager.renameFile(file, newPath, false)
+            // 自动链接更新
+            await this.app.fileManager.renameFile(file, newPath)
             await this.refresh()
           } catch (error) {
             console.error('重命名失败:', error)
@@ -707,8 +707,8 @@ export class ZettelkastenView extends ItemView {
         ? `${targetFolder}/${newBasename}.md`
         : `${newBasename}.md`
 
-      // 重命名并移动文件（禁用自动链接更新）
-      await this.app.fileManager.renameFile(draggedFile, newPath, false)
+      // 重命名并移动文件
+      await this.app.fileManager.renameFile(draggedFile, newPath)
 
       // 刷新视图
       await this.refresh()
