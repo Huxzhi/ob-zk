@@ -1,6 +1,6 @@
 import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from 'obsidian'
 import type ZettelkastenPlugin from './main'
-import { RenameModal } from './modal'
+import { NoteInputModal } from './modal'
 import { getLetterSequenceFromIndex } from './utils'
 
 export const VIEW_TYPE_ZETTELKASTEN = 'zettelkasten-navigator-view'
@@ -168,7 +168,6 @@ export class ZettelkastenView extends ItemView {
 
   renderZettelList(container: HTMLElement, zettels: ZettelNode[]) {
     const ul = container.createEl('ul', { cls: 'zk-list' })
-    const activeFile = this.app.workspace.getActiveFile()
 
     for (let i = 0; i < zettels.length; i++) {
       const zettel = zettels[i]
@@ -199,11 +198,12 @@ export class ZettelkastenView extends ItemView {
       // 存储文件路径以便后续更新高亮
       li.setAttribute('data-file-path', zettel.file.path)
 
-      // 如果是当前打开的文件，添加高亮样式
-      if (activeFile && zettel.file?.path === activeFile.path) {
+      // 如果是当前激活的条目，添加高亮样式
+      if (this.activeItemPath && zettel.file?.path === this.activeItemPath) {
         li.addClass('zk-item-active')
-      } else if (this.recentFiles.includes(zettel.file.path)) {
-        // 如果是最近打开的文件，添加最近文件样式
+      }
+      // 如果是最近打开的文件，添加最近文件样式
+      if (this.recentFiles.includes(zettel.file.path)) {
         li.addClass('zk-item-recent')
       }
 
@@ -323,9 +323,12 @@ export class ZettelkastenView extends ItemView {
 
       // 添加子笔记按钮
       const addBtn = actions.createEl('button', {
-        text: '+',
+        text: '➕',
         cls: 'zk-action-btn',
-        attr: { 'aria-label': '添加子笔记' },
+        attr: {
+          'aria-label': '添加子笔记',
+          title: '添加子笔记',
+        },
       })
       addBtn.onclick = async (e) => {
         e.stopPropagation()
@@ -334,9 +337,12 @@ export class ZettelkastenView extends ItemView {
 
       // 重命名按钮
       const renameBtn = actions.createEl('button', {
-        text: '✎',
+        text: '✏️',
         cls: 'zk-action-btn',
-        attr: { 'aria-label': '重命名' },
+        attr: {
+          'aria-label': '重命名',
+          title: '重命名笔记',
+        },
       })
       renameBtn.onclick = (e) => {
         e.stopPropagation()
@@ -430,37 +436,54 @@ export class ZettelkastenView extends ItemView {
   }
 
   async createChildNote(parent: ZettelNode) {
-    const modal = new RenameModal(this.app, '', async (newName) => {
-      if (!newName.trim()) {
-        new Notice('文件名不能为空')
-        return
-      }
-
-      const newNoteName = `${newName}.md`
-
-      try {
-        // 创建新文件
-        const newFile = await this.app.vault.create(newNoteName, '')
-
-        // 在父文件中添加引用到新文件
-        const parentContent = await this.app.vault.read(parent.file)
-        const linkText = `[[${newName}]]`
-        const newContent = parentContent + '\n' + linkText
-        await this.app.vault.modify(parent.file, newContent)
-
-        // 打开新文件
-        const leaf = this.app.workspace.getMostRecentLeaf()
-        if (leaf) {
-          await leaf.openFile(newFile)
+    const modal = new NoteInputModal(
+      this.app,
+      '',
+      '新建子笔记',
+      async (newName) => {
+        if (!newName.trim()) {
+          new Notice('文件名不能为空')
+          return
         }
 
-        // 刷新视图
-        await this.refresh()
-      } catch (error) {
-        console.error('创建子笔记失败:', error)
-        new Notice('创建子笔记失败')
-      }
-    })
+        try {
+          // 获取父条目的目录路径
+          const parentPath = parent.file.path
+          const parentDir = parentPath.substring(0, parentPath.lastIndexOf('/'))
+          const newFilePath = parentDir
+            ? `${parentDir}/${newName}.md`
+            : `${newName}.md`
+
+          // 在子条目文件中添加父条目的引用
+          const parentLink = `[[${parent.file.basename}]]`
+          const initialContent = `${parentLink}\n\n`
+
+          // 创建新文件在父条目相同的目录中
+          const newFile = await this.app.vault.create(
+            newFilePath,
+            initialContent,
+          )
+
+          // 在父文件中添加引用到新文件
+          const parentContent = await this.app.vault.read(parent.file)
+          const childLink = `[[${newName}]]`
+          const newParentContent = parentContent + '\n' + childLink
+          await this.app.vault.modify(parent.file, newParentContent)
+
+          // 打开新文件
+          const leaf = this.app.workspace.getMostRecentLeaf()
+          if (leaf) {
+            await leaf.openFile(newFile)
+          }
+
+          // 刷新视图
+          await this.refresh()
+        } catch (error) {
+          console.error('创建子笔记失败:', error)
+          new Notice('创建子笔记失败')
+        }
+      },
+    )
 
     modal.open()
   }
@@ -469,9 +492,10 @@ export class ZettelkastenView extends ItemView {
     const currentName = file.basename
 
     // 提示用户输入新的文件名
-    const modal = new RenameModal(
+    const modal = new NoteInputModal(
       this.app,
       currentName,
+      `重命名笔记: ${currentName}`,
       async (newName: string) => {
         if (newName && newName !== currentName) {
           try {
@@ -486,11 +510,6 @@ export class ZettelkastenView extends ItemView {
       },
     )
     modal.open()
-  }
-
-  async handleFileDrop(e: DragEvent, targetZettel: any) {
-    // 拖放功能暂时禁用
-    return
   }
 
   /**
@@ -532,7 +551,8 @@ export class ZettelkastenView extends ItemView {
       // 添加对应的高亮样式
       if (this.activeItemPath && filePath === this.activeItemPath) {
         li.addClass('zk-item-active')
-      } else if (filePath && this.recentFiles.includes(filePath)) {
+      }
+      if (filePath && this.recentFiles.includes(filePath)) {
         li.addClass('zk-item-recent')
       }
     })
@@ -547,7 +567,10 @@ export class ZettelkastenView extends ItemView {
    */
   private getAllZettels(): Array<ZettelNode> {
     if (!this.zettelCache) {
-      const zettelFiles = this.app.vault.getMarkdownFiles()
+      let zettelFiles = this.app.vault.getMarkdownFiles()
+
+      // 根据设置进行排序
+      zettelFiles = this.sortFiles(zettelFiles)
 
       // 找到根文件
       let rootFile: TFile | null = null
@@ -558,7 +581,7 @@ export class ZettelkastenView extends ItemView {
           ) || null
       }
       if (!rootFile && zettelFiles.length > 0) {
-        // 如果没有指定根文件，使用第一个文件作为根
+        // 如果没有指定根文件，使用排序后的第一个文件作为根
         rootFile = zettelFiles[0]
       }
 
@@ -721,6 +744,58 @@ export class ZettelkastenView extends ItemView {
       }
     }
     return this.zettelCache
+  }
+
+  private sortFiles(files: TFile[]): TFile[] {
+    const { sortBy, sortField, sortOrder } = this.plugin.settings
+
+    return files.sort((a, b) => {
+      let valueA: any
+      let valueB: any
+
+      switch (sortBy) {
+        case 'filename':
+          valueA = a.basename.toLowerCase()
+          valueB = b.basename.toLowerCase()
+          break
+
+        case 'created':
+          valueA = a.stat.ctime
+          valueB = b.stat.ctime
+          break
+
+        case 'modified':
+          valueA = a.stat.mtime
+          valueB = b.stat.mtime
+          break
+
+        case 'yaml':
+          const frontmatterA =
+            this.app.metadataCache.getFileCache(a)?.frontmatter
+          const frontmatterB =
+            this.app.metadataCache.getFileCache(b)?.frontmatter
+
+          valueA = frontmatterA?.[sortField] || ''
+          valueB = frontmatterB?.[sortField] || ''
+
+          // 如果是字符串，转为小写进行比较
+          if (typeof valueA === 'string') valueA = valueA.toLowerCase()
+          if (typeof valueB === 'string') valueB = valueB.toLowerCase()
+          break
+
+        default:
+          valueA = a.basename.toLowerCase()
+          valueB = b.basename.toLowerCase()
+      }
+
+      // 比较值
+      let result = 0
+      if (valueA < valueB) result = -1
+      else if (valueA > valueB) result = 1
+
+      // 根据排序顺序调整
+      return sortOrder === 'desc' ? -result : result
+    })
   }
 
   updateRecentFiles(filePath: string) {

@@ -4,11 +4,17 @@ import { VIEW_TYPE_ZETTELKASTEN, ZettelkastenView } from './view'
 interface ZettelkastenSettings {
   collapsedIds: string[]
   rootFile: string
+  sortBy: string
+  sortField: string
+  sortOrder: 'asc' | 'desc'
 }
 
 const DEFAULT_SETTINGS: ZettelkastenSettings = {
   collapsedIds: [],
   rootFile: '',
+  sortBy: 'filename', // 'filename', 'created', 'modified', 'yaml'
+  sortField: 'title', // YAML字段名，当sortBy为'yaml'时使用
+  sortOrder: 'asc', // 'asc' 或 'desc'
 }
 
 export default class ZettelkastenPlugin extends Plugin {
@@ -124,6 +130,77 @@ class ZettelkastenSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.rootFile)
           .onChange(async (value) => {
             this.plugin.settings.rootFile = value
+            await this.plugin.saveSettings()
+          }),
+      )
+
+    let yamlFieldSetting: Setting | null = null
+
+    new Setting(containerEl)
+      .setName('排序方式')
+      .setDesc('选择文件排序的依据')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('filename', '文件名')
+          .addOption('created', '创建时间')
+          .addOption('modified', '修改时间')
+          .addOption('yaml', 'YAML字段')
+          .setValue(this.plugin.settings.sortBy)
+          .onChange(async (value: string) => {
+            this.plugin.settings.sortBy = value
+            await this.plugin.saveSettings()
+
+            // 动态显示/隐藏YAML字段名设置
+            if (value === 'yaml') {
+              if (!yamlFieldSetting) {
+                yamlFieldSetting = new Setting(containerEl)
+                  .setName('YAML字段名')
+                  .setDesc('当排序方式为YAML字段时，指定字段名')
+                  .addText((text) =>
+                    text
+                      .setPlaceholder('例如: order, priority, date')
+                      .setValue(this.plugin.settings.sortField)
+                      .onChange(async (value) => {
+                        this.plugin.settings.sortField = value
+                        await this.plugin.saveSettings()
+                      }),
+                  )
+              }
+              yamlFieldSetting.settingEl.style.display = ''
+            } else {
+              if (yamlFieldSetting) {
+                yamlFieldSetting.settingEl.style.display = 'none'
+              }
+            }
+          }),
+      )
+
+    // 初始状态：如果当前选择的是YAML字段，则显示YAML字段名设置
+    if (this.plugin.settings.sortBy === 'yaml') {
+      yamlFieldSetting = new Setting(containerEl)
+        .setName('YAML字段名')
+        .setDesc('当排序方式为YAML字段时，指定字段名')
+        .addText((text) =>
+          text
+            .setPlaceholder('例如: order, priority, date')
+            .setValue(this.plugin.settings.sortField)
+            .onChange(async (value) => {
+              this.plugin.settings.sortField = value
+              await this.plugin.saveSettings()
+            }),
+        )
+    }
+
+    new Setting(containerEl)
+      .setName('排序顺序')
+      .setDesc('选择升序或降序')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('asc', '升序 (A-Z, 旧-新)')
+          .addOption('desc', '降序 (Z-A, 新-旧)')
+          .setValue(this.plugin.settings.sortOrder)
+          .onChange(async (value: string) => {
+            this.plugin.settings.sortOrder = value as 'asc' | 'desc'
             await this.plugin.saveSettings()
           }),
       )
