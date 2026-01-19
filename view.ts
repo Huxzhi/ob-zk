@@ -1,20 +1,14 @@
 import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from 'obsidian'
 import type ZettelkastenPlugin from './main'
 import { RenameModal } from './modal'
-import {
-  compareZettelIds,
-  getNextLetterSequence,
-  isDigitPart,
-  joinParts,
-  parseZettelId,
-} from './utils'
+import { getLetterSequenceFromIndex } from './utils'
 
 export const VIEW_TYPE_ZETTELKASTEN = 'zettelkasten-navigator-view'
 
 export interface ZettelNode {
   file: TFile // 允许为 null，表示占位节点
-  id: string // 完整ID字符串
-  parts: string[] // 使用字符串数组表示 ID 的各个部分
+  id: string // 自动编号ID
+  children: ZettelNode[] // 子节点
   level: number
 }
 
@@ -24,6 +18,9 @@ export class ZettelkastenView extends ItemView {
   collapsedIds: Set<string> // 存储折叠的条目ID
   private zettelCache: ZettelNode[] | null = null // 缓存显示条目
   private activeItemPath: string | null = null // 当前激活的条目路径
+  private refreshTimeout: NodeJS.Timeout | null = null // 防抖定时器
+  private lastRefreshTime: number = 0 // 最后刷新时间戳
+  private isRefreshing: boolean = false // 是否正在刷新
 
   constructor(leaf: WorkspaceLeaf, plugin: ZettelkastenPlugin) {
     super(leaf)
@@ -52,9 +49,22 @@ export class ZettelkastenView extends ItemView {
     // 添加刷新按钮和计数显示
     const headerEl = this.contentEl.createDiv({ cls: 'zk-header' })
 
+    // 右边控制区域
+    const controlsEl = headerEl.createDiv({ cls: 'zk-controls' })
+
     // 笔记计数显示
-    const countEl = headerEl.createDiv({ cls: 'zk-count' })
+    const countEl = controlsEl.createDiv({ cls: 'zk-count' })
     countEl.textContent = '笔记: 0'
+
+    // 全部展开/折叠按钮
+    const toggleBtn = controlsEl.createEl('button', {
+      text: '展开全部',
+      cls: 'zk-toggle-btn',
+      attr: { 'aria-label': '展开/折叠全部条目' },
+    })
+    toggleBtn.onclick = () => {
+      this.toggleAllCollapse()
+    }
 
     // 创建笔记列表容器
     const listContainer = this.contentEl.createDiv({ cls: 'zk-list-container' })
@@ -62,28 +72,25 @@ export class ZettelkastenView extends ItemView {
     // 初始渲染
     await this.refresh()
 
-    // 监听文件变化 - 只在卢曼笔记变化时刷新
+    // 监听文件变化 - 只在笔记变化时刷新
     this.registerEvent(
       this.app.vault.on('create', (file) => {
-        if (this.isZettelFile(file)) {
+        if (file instanceof TFile && file.extension === 'md') {
           this.refresh()
         }
       }),
     )
     this.registerEvent(
       this.app.vault.on('delete', (file) => {
-        if (this.isZettelFile(file)) {
+        if (file instanceof TFile && file.extension === 'md') {
           this.refresh()
         }
       }),
     )
     this.registerEvent(
       this.app.vault.on('rename', (file, oldPath) => {
-        // 检查新旧文件名是否有一个符合卢曼格式
-        const oldBasename = oldPath.split('/').pop()?.replace(/\.md$/, '') || ''
-        const isOldZettel = parseZettelId(oldBasename) !== null
-        const isNewZettel = this.isZettelFile(file)
-        if (isOldZettel || isNewZettel) {
+        // 检查新旧文件名是否有一个是 md 文件
+        if (file instanceof TFile && file.extension === 'md') {
           this.refresh()
         }
       }),
@@ -101,22 +108,62 @@ export class ZettelkastenView extends ItemView {
   }
 
   async refresh() {
-    const listContainer = this.contentEl.querySelector('.zk-list-container')
-    if (!listContainer) return
-
-    listContainer.empty()
-
-    // 清除缓存并重新构建
-    this.zettelCache = null
-
-    // 更新笔记计数
-    const countEl = this.contentEl.querySelector('.zk-count')
-    if (countEl) {
-      countEl.textContent = `笔记: ${this.getAllZettels().length}`
+    // 防抖：避免频繁刷新
+    if (this.refreshTimeout) {
+      clearTimeout(this.refreshTimeout)
     }
 
-    // 渲染列表（将嵌套结构展开）
-    this.renderZettelList(listContainer as HTMLElement, this.getAllZettels())
+    // 如果正在刷新，跳过
+    if (this.isRefreshing) {
+      return
+    }
+
+    this.refreshTimeout = setTimeout(async () => {
+      await this.performRefresh()
+    }, 100) // 100ms 防抖
+  }
+
+  private async performRefresh() {
+    if (this.isRefreshing) return
+
+    this.isRefreshing = true
+    const startTime = Date.now()
+
+    try {
+      const listContainer = this.contentEl.querySelector('.zk-list-container')
+      if (!listContainer) return
+
+      listContainer.empty()
+
+      // 清除缓存并重新构建
+      this.zettelCache = null
+
+      // 更新笔记计数
+      const countEl = this.contentEl.querySelector('.zk-count')
+      if (countEl) {
+        countEl.textContent = `笔记: ${this.getAllZettels().length}`
+      }
+
+      // 渲染列表（将嵌套结构展开）
+      this.renderZettelList(listContainer as HTMLElement, this.getAllZettels())
+
+      // 性能监控
+      const endTime = Date.now()
+      const duration = endTime - startTime
+      console.log(`ZK view refresh completed in ${duration}ms`)
+
+      // 如果刷新时间过长，显示警告
+      if (duration > 1000) {
+        console.warn(`ZK view refresh took ${duration}ms - consider optimizing`)
+      }
+    } catch (error) {
+      console.error('ZK view refresh failed:', error)
+    } finally {
+      // 重置刷新状态
+      this.isRefreshing = false
+      // 更新按钮文本
+      this.updateToggleButtonText()
+    }
   }
 
   renderZettelList(container: HTMLElement, zettels: ZettelNode[]) {
@@ -133,7 +180,11 @@ export class ZettelkastenView extends ItemView {
       if (level > 0) {
         // 检查所有可能的父节点是否被折叠
         for (const collapsedId of this.collapsedIds) {
-          if (zettelId.startsWith(collapsedId) && zettelId !== collapsedId) {
+          if (
+            zettelId.startsWith(collapsedId) &&
+            zettelId.length > collapsedId.length &&
+            zettelId !== collapsedId
+          ) {
             shouldHide = true
             break
           }
@@ -156,15 +207,13 @@ export class ZettelkastenView extends ItemView {
         li.addClass('zk-item-recent')
       }
 
-      // 根据层级设置缩进（基础 padding 4px + 层级缩进）
+      // 根据层级设置缩进
       li.style.paddingLeft = `${level * 10}px`
 
       // 创建项目容器
       const itemContent = li.createDiv({ cls: 'zk-item-content' })
 
-      const hasChildren = zettels.some(
-        (z) => z.id.startsWith(zettelId) && z.id !== zettelId,
-      )
+      const hasChildren = zettel.children && zettel.children.length > 0
 
       if (hasChildren) {
         // 添加折叠/展开按钮
@@ -196,18 +245,12 @@ export class ZettelkastenView extends ItemView {
         text: zettel.id,
       })
 
-      // 显示标题（使用 - 分隔符）
+      // 显示标题（直接使用basename，如果有-则去掉前缀）
       const basename = zettel.file.basename
-      let title = ''
-      const dashIndex = basename.indexOf('-')
-      if (dashIndex > 0) {
-        title = basename.substring(dashIndex + 1).trim()
-      } else {
-        title = basename.replace(zettel.id, '').trim()
-      }
+
       const titleSpan = itemContent.createSpan({
         cls: 'zk-title',
-        text: title || '(无标题)',
+        text: basename,
       })
 
       // 点击打开文件
@@ -254,8 +297,8 @@ export class ZettelkastenView extends ItemView {
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'copyMove'
 
-          // 生成双链文本 [[文件名]]
-          const fileName = zettel.file.basename
+          // 生成双链文本 [[文件名]] - 去掉.md扩展名
+          const fileName = zettel.file.basename.replace(/\.md$/, '')
           const wikiLink = `[[${fileName}]]`
 
           // 设置文本格式（拖到编辑器时使用）
@@ -275,50 +318,8 @@ export class ZettelkastenView extends ItemView {
         li.removeClass('zk-item-dragging')
       })
 
-      // 监听拖放事件
-      li.addEventListener('dragover', (e) => {
-        e.preventDefault()
-        e.dataTransfer!.dropEffect = 'move'
-        li.addClass('zk-item-dragover')
-      })
-
-      li.addEventListener('dragleave', (e) => {
-        e.preventDefault()
-        li.removeClass('zk-item-dragover')
-      })
-
-      li.addEventListener('drop', async (e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        li.removeClass('zk-item-dragover')
-
-        await this.handleFileDrop(e, zettel)
-      })
-
       // 添加操作按钮
       const actions = li.createDiv({ cls: 'zk-actions' })
-
-      // 反向缩进按钮（提升一个层级）
-      const outdentBtn = actions.createEl('button', {
-        text: '←',
-        cls: 'zk-action-btn',
-        attr: { 'aria-label': '反向缩进' },
-      })
-      outdentBtn.onclick = async (e) => {
-        e.stopPropagation()
-        await this.outdentNote(zettel)
-      }
-
-      // 缩进按钮（变为上一个兄弟节点的子节点）
-      const indentBtn = actions.createEl('button', {
-        text: '→',
-        cls: 'zk-action-btn',
-        attr: { 'aria-label': '缩进' },
-      })
-      indentBtn.onclick = async (e) => {
-        e.stopPropagation()
-        await this.indentNote(zettel)
-      }
 
       // 添加子笔记按钮
       const addBtn = actions.createEl('button', {
@@ -392,219 +393,82 @@ export class ZettelkastenView extends ItemView {
     menu.showAtMouseEvent(e)
   }
 
-  async createChildNote(parent: ZettelNode) {
+  toggleAllCollapse() {
     const allZettels = this.getAllZettels()
-    const nextId = this.generateChildId(allZettels, parent)
+    const hasCollapsedItems = this.collapsedIds.size > 0
 
-    if (!nextId) {
-      new Notice('❌ 无法生成新的子笔记ID')
-      return
-    }
-
-    const newNoteName = `${nextId}-.md`
-
-    try {
-      // 创建新文件
-      const newFile = await this.app.vault.create(newNoteName, '')
-
-      // 打开新文件
-      const leaf = this.app.workspace.getMostRecentLeaf()
-      if (leaf) {
-        await leaf.openFile(newFile)
-      }
-
-      // 刷新视图
-      await this.refresh()
-    } catch (error) {
-      console.error('创建子笔记失败:', error)
-    }
-  }
-
-  /**
-   * 生成指定父节点的下一个子节点 ID
-   */
-  private generateChildId(
-    allZettels: ZettelNode[],
-    parent: ZettelNode,
-    self: ZettelNode | null = null,
-  ): string | null {
-    // 找到父节点的最大直接子节点
-    const targetLevel = parent.level + 1
-    let maxChild: ZettelNode | null = null
-    parent.id = joinParts(parent.parts) // 确保 parent.id 正确
-    const parentIndex = allZettels.findIndex(
-      (zettel) => zettel.id === parent.id,
-    )
-    // 确保父节点存在，除非是顶层虚拟节点
-    if (parentIndex === -1 && parent.level !== 0) {
-      return null
-    }
-
-    for (let i = parentIndex + 1; i < allZettels.length; i++) {
-      const candidate = allZettels[i]
-
-      // 如果遇到层级小于等于当前节点的，说明已经离开当前节点的子树
-      if (candidate.level < targetLevel) {
-        break
-      }
-
-      // 只考虑目标层级的节点
-      if (candidate.level > targetLevel) {
-        continue
-      }
-
-      // 检查是否是当前节点的直接子节点
-      const candidateParentId = joinParts(candidate.parts.slice(0, -1))
-      if (candidateParentId === parent.id && candidate.id !== self?.id) {
-        // 因为数组已排序，后面的就是更大的
-        maxChild = candidate
-      }
-    }
-
-    // 基于 maxChild 生成新 ID
-    if (maxChild) {
-      // 有子节点，基于最大子节点生成下一个
-      const lastPart = maxChild.parts[maxChild.parts.length - 1]
-      let nextPart: string
-      if (isDigitPart(lastPart)) {
-        nextPart = (parseInt(lastPart) + 1).toString()
-      } else {
-        const nextLetters = getNextLetterSequence(lastPart)
-        if (!nextLetters) {
-          return null
-        }
-        nextPart = nextLetters
-      }
-
-      // 返回新 ID
-      if (parent.parts.length === 0) {
-        return nextPart
-      } else {
-        return joinParts([...parent.parts, nextPart])
-      }
+    if (hasCollapsedItems) {
+      // 如果有折叠的项目，则全部展开
+      this.collapsedIds.clear()
     } else {
-      // 没有子节点，生成第一个子节点
-      if (parent.parts.length === 0) {
-        return 'a'
-      } else {
-        const lastPart = parent.parts[parent.parts.length - 1]
-        const firstChildPart = isDigitPart(lastPart) ? 'a' : '1'
-        return joinParts([...parent.parts, firstChildPart])
-      }
-    }
-  }
-
-  async indentNote(zettel: ZettelNode) {
-    try {
-      const allZettels = this.getAllZettels()
-
-      // 找到上一个兄弟节点
-      const currentIndex = allZettels.findIndex((z) => z.id === zettel.id)
-      if (currentIndex <= 0) {
-        new Notice('没有上一个兄弟节点')
-        return
-      }
-
-      // 生成作为上一个兄弟节点的子节点 ID
-      const newId = this.generateChildId(
-        allZettels,
-        allZettels[currentIndex - 1],
-        zettel,
-      )
-
-      if (newId === zettel.id) {
-        new Notice('❌ 新ID与当前ID相同，缩进失败')
-        return
-      }
-
-      if (!newId) {
-        new Notice('❌ 无法生成新ID，缩进失败')
-        return
-      }
-
-      this.renameId(zettel, newId)
-    } catch (error) {
-      console.error('缩进失败:', error)
-    }
-  }
-
-  async outdentNote(zettel: ZettelNode) {
-    try {
-      // 检查是否可以反向缩进（必须至少有一个层级）
-      if (zettel.level === 1) {
-        new Notice('已经是顶层，无法反向缩进')
-        return
-      }
-
-      const allZettels = this.getAllZettels()
-
-      // 从祖父节点开始尝试，如果无法生成新ID，就继续往上一层
-      let parentParts = zettel.parts.slice(0, -2)
-      let newId: string | null = null
-
-      while (newId === null) {
-        // 构造虚拟父节点
-        const parentNode: ZettelNode = {
-          file: null as any,
-          id: joinParts(parentParts),
-          parts: parentParts,
-          level: parentParts.length,
-        }
-
-        // 尝试生成新ID
-        newId = this.generateChildId(allZettels, parentNode)
-
-        // 如果生成失败且还未到达顶层，继续往上一层
-        if (newId === null && parentParts.length > 0) {
-          parentParts = parentParts.slice(0, -1)
-        } else if (newId === null && parentParts.length === 0) {
-          // 已经到达顶层仍无法生成
-          new Notice('❌ 无法生成新ID，反向缩进失败')
-          return
+      // 如果全部展开，则全部折叠（除了根级别的项目）
+      for (const zettel of allZettels) {
+        if (zettel.level > 0 && zettel.children && zettel.children.length > 0) {
+          this.collapsedIds.add(zettel.id)
         }
       }
-
-      this.renameId(zettel, newId)
-    } catch (error) {
-      console.error('反向缩进失败:', error)
-    }
-  }
-
-  async renameId(zettel: ZettelNode, newId: string) {
-    const currentFile = zettel.file
-    // 提取原文件名中的标题部分
-    const basename = currentFile.basename
-    let title = ''
-    const dashIndex = basename.indexOf('-')
-    if (dashIndex > 0) {
-      title = basename.substring(dashIndex + 1).trim()
-    } else {
-      title = basename.replace(zettel.id, '').trim()
     }
 
-    // 构建新文件名
-    const newBasename = title ? `${newId}-${title}` : `${newId}-`
-    const newPath = currentFile.path.replace(
-      currentFile.name,
-      `${newBasename}.md`,
-    )
-
-    // 重命名文件
-    await this.app.fileManager.renameFile(currentFile, newPath)
+    // 保存折叠状态
+    this.saveCollapsedState()
 
     // 刷新视图
-    await this.refresh()
+    this.refresh()
 
-    console.log(`重命名成功: ${currentFile.name} -> ${newBasename}.md`)
+    // 更新按钮文本
+    this.updateToggleButtonText()
+  }
+
+  updateToggleButtonText() {
+    const toggleBtn = this.contentEl.querySelector(
+      '.zk-toggle-btn',
+    ) as HTMLButtonElement
+    if (toggleBtn) {
+      const hasCollapsedItems = this.collapsedIds.size > 0
+      toggleBtn.textContent = hasCollapsedItems ? '展开全部' : '折叠全部'
+    }
+  }
+
+  async createChildNote(parent: ZettelNode) {
+    const modal = new RenameModal(this.app, '', async (newName) => {
+      if (!newName.trim()) {
+        new Notice('文件名不能为空')
+        return
+      }
+
+      const newNoteName = `${newName}.md`
+
+      try {
+        // 创建新文件
+        const newFile = await this.app.vault.create(newNoteName, '')
+
+        // 在父文件中添加引用到新文件
+        const parentContent = await this.app.vault.read(parent.file)
+        const linkText = `[[${newName}]]`
+        const newContent = parentContent + '\n' + linkText
+        await this.app.vault.modify(parent.file, newContent)
+
+        // 打开新文件
+        const leaf = this.app.workspace.getMostRecentLeaf()
+        if (leaf) {
+          await leaf.openFile(newFile)
+        }
+
+        // 刷新视图
+        await this.refresh()
+      } catch (error) {
+        console.error('创建子笔记失败:', error)
+        new Notice('创建子笔记失败')
+      }
+    })
+
+    modal.open()
   }
 
   async renameNote(file: TFile) {
     const currentName = file.basename
-    const parsed = parseZettelId(currentName)
 
-    if (!parsed) return
-
-    // 提示用户输入新的ID
+    // 提示用户输入新的文件名
     const modal = new RenameModal(
       this.app,
       currentName,
@@ -625,117 +489,8 @@ export class ZettelkastenView extends ItemView {
   }
 
   async handleFileDrop(e: DragEvent, targetZettel: any) {
-    try {
-      // 从dataTransfer中获取文件路径
-      let draggedFile: TFile | null = null
-
-      // 1. 先尝试从自定义数据类型获取（条目拖动）
-      const customPath = e.dataTransfer?.getData(
-        'application/x-obsidian-file-path',
-      )
-      if (customPath) {
-        draggedFile = this.app.vault.getAbstractFileByPath(customPath) as TFile
-      }
-
-      // 2. 如果没有，尝试从Obsidian URI获取（文件浏览器拖动）
-      if (!draggedFile) {
-        const uriData = e.dataTransfer?.getData('text/plain')
-
-        if (uriData && uriData.startsWith('obsidian://')) {
-          // 解析Obsidian URI: obsidian://open?vault=xxx&file=path
-          try {
-            const url = new URL(uriData)
-            const filePath = url.searchParams.get('file')
-
-            if (filePath) {
-              // URL解码文件路径
-              const decodedPath = decodeURIComponent(filePath)
-
-              // 获取TFile对象
-              draggedFile = this.app.vault.getAbstractFileByPath(
-                decodedPath + '.md',
-              ) as TFile
-
-              // 如果加.md找不到，尝试不加.md
-              if (!draggedFile) {
-                draggedFile = this.app.vault.getAbstractFileByPath(
-                  decodedPath,
-                ) as TFile
-              }
-            }
-          } catch (error) {
-            console.error('解析URI失败:', error)
-          }
-        }
-      }
-
-      if (!draggedFile) {
-        return
-      }
-
-      // 防止拖到自己身上
-      if (draggedFile.path === targetZettel.file.path) {
-        return
-      }
-
-      // 生成新的ID（作为目标笔记的子笔记）
-      const allZettels = this.getAllZettels()
-      const newId = this.generateChildId(allZettels, targetZettel)
-
-      if (!newId) {
-        new Notice('❌ 无法生成新ID，拖放失败')
-        return
-      }
-
-      // 提取原文件名中的标题部分
-      const basename = draggedFile.basename
-      let title = ''
-      const dashIndex = basename.indexOf('-')
-      if (dashIndex > 0) {
-        // 如果原文件名有-分隔符，提取标题
-        title = basename.substring(dashIndex + 1).trim()
-      } else {
-        // 检查是否符合卢曼格式
-        const parsed = parseZettelId(basename)
-        if (parsed) {
-          // 符合格式，提取ID后的部分作为标题
-          title = basename.replace(parsed.id, '').trim()
-        } else {
-          // 不符合格式，整个文件名作为标题
-          title = basename
-        }
-      }
-
-      // 构建新文件名
-      const newBasename = title ? `${newId}-${title}` : `${newId}-`
-
-      // 获取目标文件所在的文件夹
-      const targetFolder = targetZettel.file.parent.path
-
-      // 构建新路径（移动到目标文件所在文件夹）
-      const newPath = targetFolder
-        ? `${targetFolder}/${newBasename}.md`
-        : `${newBasename}.md`
-
-      // 重命名并移动文件
-      await this.app.fileManager.renameFile(draggedFile, newPath)
-
-      // 刷新视图
-      await this.refresh()
-
-      console.log(`文件已移动并重命名: ${draggedFile.path} -> ${newPath}`)
-    } catch (error) {
-      console.error('拖放处理失败:', error)
-    }
-  }
-
-  /**
-   * 检查文件是否是卢曼笔记（符合ID格式）
-   */
-  private isZettelFile(file: any): boolean {
-    if (!file || typeof file.basename !== 'string') return false
-    const parsed = parseZettelId(file.basename)
-    return parsed !== null
+    // 拖放功能暂时禁用
+    return
   }
 
   /**
@@ -783,35 +538,187 @@ export class ZettelkastenView extends ItemView {
     })
   }
 
-  escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  }
-
   saveCollapsedState() {
     this.plugin.settings.collapsedIds = Array.from(this.collapsedIds)
     this.plugin.saveSettings()
   }
 
   /**
-   * 获取所有已解析的卢曼笔记
    */
   private getAllZettels(): Array<ZettelNode> {
     if (!this.zettelCache) {
-      const files = this.app.vault.getMarkdownFiles()
-      this.zettelCache = files
-        .map((file) => {
-          const parsed = parseZettelId(file.basename)
+      const zettelFiles = this.app.vault.getMarkdownFiles()
+
+      // 找到根文件
+      let rootFile: TFile | null = null
+      if (this.plugin.settings.rootFile) {
+        rootFile =
+          zettelFiles.find(
+            (f) => f.basename === this.plugin.settings.rootFile,
+          ) || null
+      }
+      if (!rootFile && zettelFiles.length > 0) {
+        // 如果没有指定根文件，使用第一个文件作为根
+        rootFile = zettelFiles[0]
+      }
+
+      if (!rootFile) {
+        this.zettelCache = []
+        return this.zettelCache
+      }
+
+      // 构建正向引用映射：file -> 引用的文件列表
+      const forwardLinks = new Map<TFile, TFile[]>()
+      for (const file of zettelFiles) {
+        const links = this.app.metadataCache.getFileCache(file)?.links || []
+        const referencedFiles: TFile[] = []
+        for (const link of links) {
+          const linkedFile = this.app.metadataCache.getFirstLinkpathDest(
+            link.link,
+            file.path,
+          )
+          if (
+            linkedFile &&
+            linkedFile instanceof TFile &&
+            linkedFile.extension === 'md'
+          ) {
+            referencedFiles.push(linkedFile)
+          }
+        }
+        forwardLinks.set(file, referencedFiles)
+      }
+
+      // 获取反向链接的辅助函数
+      const getBacklinks = (file: TFile): Record<string, number> => {
+        const backlinks: Record<string, number> = {}
+        const resolvedLinks = this.app.metadataCache.resolvedLinks
+
+        for (const sourcePath in resolvedLinks) {
+          const links = resolvedLinks[sourcePath]
+          if (links[file.path]) {
+            backlinks[sourcePath] = links[file.path]
+          }
+        }
+
+        return backlinks
+      }
+
+      // 构建树
+      const buildTree = (
+        file: TFile,
+        level: number,
+        currentId: string, // 完整的节点ID
+        useLetters: boolean, // 当前层级是否使用字母
+        ancestors: Set<TFile> = new Set(), // 当前分支的祖先节点
+      ): ZettelNode => {
+        // 检查是否与当前分支的祖先节点重合，避免循环引用
+        if (ancestors.has(file)) {
+          // 避免循环引用，返回一个占位节点
           return {
             file,
-            id: parsed?.id || '',
-            parts: parsed?.parts || [],
-            level: parsed ? parsed.level : 0,
+            id: `${currentId}${useLetters ? 'a' : '1'}`,
+            children: [],
+            level,
           }
+        }
+
+        // 创建新的祖先集合，包含当前文件
+        const newAncestors = new Set(ancestors)
+        newAncestors.add(file)
+
+        // 注意：currentId 现在作为参数传入，不再在这里生成
+
+        // 使用反向链接获取子节点
+        const backlinks = getBacklinks(file)
+
+        // 分别收集双向引用和单向引用
+        const mutualChildren: TFile[] = [] // 双向引用文件（放在前面）
+        const singleChildren: TFile[] = [] // 单向引用文件
+
+        for (const path in backlinks) {
+          const backlinkFile = this.app.vault.getAbstractFileByPath(path)
+          if (
+            backlinkFile instanceof TFile &&
+            backlinkFile.extension === 'md' &&
+            !newAncestors.has(backlinkFile) // 过滤掉已在祖先中的文件
+          ) {
+            // 检查是否为双向引用
+            const isMutual = getBacklinks(backlinkFile)[file.path] !== undefined
+
+            if (isMutual) {
+              mutualChildren.push(backlinkFile)
+            } else {
+              singleChildren.push(backlinkFile)
+            }
+          }
+        }
+
+        // 合并子节点：双向引用在前，单向引用在后
+        const children: ZettelNode[] = []
+
+        // 为双向引用分配ID并构建节点（小数点 + 字母编号）
+        mutualChildren.forEach((backlinkFile, index) => {
+          const suffix = useLetters
+            ? (index + 1).toString() // 1, 2, 3, ...
+            : getLetterSequenceFromIndex(index)
+          const childId = `${currentId}.${suffix}`
+          // 根据当前ID末尾决定子节点是否使用字母
+          const nextUseLetters = /\d$/.test(childId) // 如果以数字结尾，下一个用字母
+          const childNode = buildTree(
+            backlinkFile,
+            level + 1,
+            childId,
+            nextUseLetters,
+            newAncestors,
+          )
+          children.push(childNode)
         })
-        .filter((z) => z.parts.length > 0)
-        .sort((a, b) => {
-          return compareZettelIds(a.parts, b.parts)
+
+        // 为单向引用分配ID并构建节点（字母数字交替）
+        singleChildren.forEach((backlinkFile, index) => {
+          const suffix = useLetters
+            ? getLetterSequenceFromIndex(index)
+            : (index + 1).toString() // 1, 2, 3, ...
+          const childId = `${currentId}${suffix}`
+          // 根据当前ID末尾决定子节点是否使用字母
+          const nextUseLetters = /\d$/.test(childId) // 如果以数字结尾，下一个用字母
+          const childNode = buildTree(
+            backlinkFile,
+            level + 1,
+            childId,
+            nextUseLetters,
+            newAncestors,
+          )
+          children.push(childNode)
         })
+
+        return {
+          file,
+          id: currentId,
+          children,
+          level,
+        }
+      }
+
+      const rootNode = buildTree(rootFile, 0, '', true, new Set()) // 根节点不显示，第一层使用字母
+
+      // 展平树为列表，用于渲染
+      const flattenTree = (node: ZettelNode): ZettelNode[] => {
+        const result = [node]
+        for (const child of node.children) {
+          result.push(...flattenTree(child))
+        }
+        return result
+      }
+
+      // 不展示根节点，直接展示并展平其子节点，调整level让第一层从0开始
+      this.zettelCache = []
+      for (const child of rootNode.children) {
+        const flattened = flattenTree(child)
+        // 调整level，让第一层从0开始显示
+        flattened.forEach((node: ZettelNode) => (node.level -= 1))
+        this.zettelCache.push(...flattened)
+      }
     }
     return this.zettelCache
   }

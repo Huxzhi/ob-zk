@@ -20,8 +20,11 @@ export function parseZettelId(filename: string): ZettelId | null {
 
   // 匹配卢曼编号模式（支持用-分隔ID和标题）
   // 支持: a, a1, a1b, a1b2, a1b.1, a.a, a1b.1a, a1b2.34-标题 等
-  // 允许字母、数字、小数点的任意组合，但不允许以点号结尾或连续点号
-  const pattern = /^([a-z](?:[a-z\d]|\.(?=[a-z\d]))*)(?:-.*)?$/
+  // 支持ID内部使用-分隔，如 a-b, a1-b2
+  // 支持大写字母用于单向引用，如 1A, 1B
+  // 允许字母、数字、小数点、横线的任意组合，但不允许以点号或横线结尾或连续点号/横线
+  const pattern =
+    /^([a-zA-Z](?:[a-zA-Z\d]|\.(?=[a-zA-Z\d])|-(?=[a-zA-Z\d]))*)(?:-.*)?$/
   const match = name.match(pattern)
 
   if (!match || !match[1]) {
@@ -33,11 +36,12 @@ export function parseZettelId(filename: string): ZettelId | null {
   // 分解ID为各个组成部分（小数点只是分隔符，不作为独立部分）
   const parts: string[] = []
 
-  // 使用正则分解整个ID，忽略点号
+  // 使用正则分解整个ID，忽略点号和横线
   // 连续字母作为一组，连续数字作为一组
   // 例如 "a1.1" 分解为 ["a", "1", "1"]
   // 例如 "aa1bb2" 分解为 ["aa", "1", "bb", "2"]
-  const idPattern = /([a-z]+|\d+)/g
+  // 例如 "a1-A2" 分解为 ["a", "1", "A", "2"]
+  const idPattern = /([a-zA-Z]+|\d+)/g
   let idMatch
 
   while ((idMatch = idPattern.exec(id)) !== null) {
@@ -91,7 +95,18 @@ export function compareZettelIds(a: string[], b: string[]): number {
 
     // 字母比较
     if (!isDigitA && !isDigitB) {
-      // 长度长的排后（如 aa > z）
+      // 检查大小写：小写字母优先于大写字母（双向引用优先于单向引用）
+      const isLowerA = partA === partA.toLowerCase()
+      const isLowerB = partB === partB.toLowerCase()
+
+      if (isLowerA && !isLowerB) {
+        return -1 // 小写排前
+      }
+      if (!isLowerA && isLowerB) {
+        return 1 // 大写排后
+      }
+
+      // 长度短的排前（如 z < aa）
       if (partA.length !== partB.length) {
         return partA.length - partB.length
       }
@@ -119,8 +134,13 @@ export function compareZettelIds(a: string[], b: string[]): number {
 /**
  * 获取下一个字母序列
  * a -> b, z -> aa, az -> ba, zz -> aaa
+ * 空字符串 -> a
  */
-export function getNextLetterSequence(letters: string): string | null {
+export function getNextLetterSequence(letters: string): string {
+  if (!letters) {
+    return 'a'
+  }
+
   const chars = letters.split('')
 
   // 从最后一位开始递增
@@ -159,6 +179,27 @@ export function joinParts(parts: string[]): string {
     segments.push(parts[i])
   }
   return segments.join('')
+}
+
+/**
+ * 从索引生成字母序列
+ * 0 -> a, 1 -> b, ..., 25 -> z, 26 -> aa, 27 -> ab, ...
+ */
+export function getLetterSequenceFromIndex(index: number): string {
+  if (index < 0) {
+    return 'a'
+  }
+
+  let result = ''
+  let remaining = index
+
+  do {
+    const remainder = remaining % 26
+    result = String.fromCharCode(97 + remainder) + result
+    remaining = Math.floor(remaining / 26) - 1
+  } while (remaining >= 0)
+
+  return result
 }
 
 /**

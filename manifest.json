@@ -1,9 +1,9 @@
 {
   "id": "zettelkasten-navigator",
   "name": "Zettelkasten Navigator",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "minAppVersion": "0.15.0",
-  "description": "卢曼笔记导航器 - 通过文件名编号进行排序、缩进显示，支持快捷键重命名和插入",
+  "description": "ZK笔记导航器 - 基于引用关系构建树形结构，支持自动编号显示",
   "author": "huxzhi",
   "authorUrl": "https://github.com/huxzhi",
   "isDesktopOnly": false

@@ -1,51 +1,39 @@
-# 卢曼笔记导航器 (Zettelkasten Navigator)
+# ZK笔记导航器 (ZK Navigator)
 
-一个为 Obsidian 设计的卢曼笔记法（Zettelkasten）导航插件，提供可视化的层级笔记管理和快速操作功能。
+一个为 Obsidian 设计的ZK笔记导航插件，基于引用关系构建树形结构，提供可视化的笔记管理和快速操作功能。
 
 ## 核心功能
 
-### 1. 笔记编码系统
+### 1. 基于反向链接的树形结构
 
-- **字母起始编码**：使用字母作为顶层标识符（a, b, c, ..., z, aa, ab, ...）
-- **交替层级**：字母和数字交替表示层级关系
-  - 顶层：`a`, `b`, `c`
-  - 第二层：`a1`, `a2`, `b1`
-  - 第三层：`a1a`, `a1b`, `a2a`
-- **小数点支持**：使用小数点创建更接近主干的子节点
-  - 例如：`a1.1` 在排序上位于 `a1a` 之前
-- **标题分隔**：使用 `-` 分隔 ID 和标题
-  - 格式：`a1b2.34-我的笔记.md`
+- **引用关系**：通过文件中的 `[[link]]` 语法建立父子关系，引用当前文件的文件作为子条目（反向链接）
+- **根文件指定**：在设置中指定根文件，从该文件开始构建树
+- **交替编码**：每降低一个层级，用英文数字交替的方式编码
+  - 根节点：`1`
+  - 第一层：`1a`, `1b`, `1c` (字母)
+  - 第二层：`1a1`, `1a2`, `1a3` (数字)
+  - 第三层：`1a1a`, `1a1b`, `1a1c` (字母)
+- **互相引用**：如果两个文件互相引用，则用小数点隔开，英文数字不交替
+  - 例如：`1.a`, `1.b` (互相引用时使用小数点)
+- **动态更新**：当文件内容改变时，树结构自动更新
 
 ### 2. 可视化导航
 
 - **树形展示**：按层级缩进显示笔记结构（每层 10px）
-- **折叠/展开**：非顶层节点可折叠子节点（使用 SVG 三角图标）
+- **折叠/展开**：有子节点的条目可折叠子节点（使用 SVG 三角图标）
 - **高亮显示**：
   - 当前打开文件：红色边框
-  - 最近打开的 3 个文件：蓝色边框
+  - 最近打开的 5 个文件：蓝色边框
 - **笔记计数**：顶部显示笔记总数
 
 ### 3. 快捷操作
 
 提供悬浮按钮（鼠标移到条目上显示）：
 
-- **← 反向缩进**：提升笔记到父节点同级
-- **→ 缩进**：将笔记降级为上一个兄弟节点的子节点
-- **+ 添加子笔记**：创建当前笔记的子笔记
-- **✎ 重命名**：修改笔记名称
+- **+ 添加子笔记**：创建当前笔记的子笔记（自动添加引用）
+- **✎ 重命名**：修改笔记文件名
 
-### 4. 拖放功能
-
-- **条目间拖放**：拖动条目到另一个条目上，自动成为其子节点
-- **文件浏览器拖放**：从 Obsidian 文件浏览器拖放文件到条目上
-
-### 5. 智能 ID 生成
-
-- **自动排除自身**：在缩进、拖放操作时排除当前文件避免冲突
-- **只查找直接子节点**：生成子 ID 时只考虑直接子节点，不包括孙子节点
-- **字母序列递增**：a → b → z → aa → ab → az → ba
-
-### 6. 状态持久化
+### 4. 状态持久化
 
 - **折叠状态保存**：关闭 Obsidian 后重新打开，折叠状态保持不变
 - **自动刷新**：文件创建、删除、重命名、打开时自动更新视图
@@ -85,7 +73,7 @@
 ob-zk/
 ├── main.ts           # 插件入口，设置管理
 ├── view.ts           # 主视图实现，UI 渲染和交互
-├── utils.ts          # ID 解析、排序等工具函数
+├── utils.ts          # 工具函数（保留兼容性）
 ├── styles.css        # 样式定义
 ├── manifest.json     # 插件元数据
 ├── package.json      # 依赖管理
@@ -100,54 +88,26 @@ ob-zk/
 ```typescript
 class ZettelkastenView extends ItemView {
   // 状态管理
-  recentFiles: string[] // 最近打开的 3 个文件
+  recentFiles: string[] // 最近打开的 5 个文件
   collapsedIds: Set<string> // 折叠的条目 ID
 
   // 核心方法
   refresh() // 刷新视图
   renderZettelList() // 渲染笔记列表
-  getNextChildId(parentId, excludeFile?) // 生成下一个子 ID
-  getNextSiblingId(baseId, excludeFile?) // 生成下一个兄弟 ID
-  indentNote(zettel) // 缩进操作
-  outdentNote(zettel) // 反向缩进操作
-  handleFileDrop(e, target) // 处理拖放
+  getAllZettels() // 获取所有笔记并构建树结构
+  createChildNote(parent) // 创建子笔记
   saveCollapsedState() // 保存折叠状态
 }
 ```
 
-#### 工具函数 (utils.ts)
+### 引用关系构建
 
-```typescript
-parseZettelId(basename: string): ZettelId | null
-  // 解析笔记名称，提取 ID、层级、部分等信息
-
-sortZettels(zettels: Array, order: 'asc' | 'desc'): Array
-  // 按照卢曼编码规则排序笔记
-
-compareZettelIds(a: ZettelId, b: ZettelId): number
-  // 比较两个 ID 的大小
-```
-
-### CSS 设计要点
-
-#### 使用 CSS 变量
-
-```css
-var(--font-ui-smaller)      // 字体大小，与原生文件目录一致
-var(--text-normal)           // 普通文本颜色
-var(--text-accent)           // 强调色
-var(--background-modifier-hover)  // 悬浮背景色
-```
-
-#### 折叠图标
-
-- 容器：10px × 10px
-- SVG 图标：10px × 10px
-- 旋转动画：折叠时向右旋转 -90deg
-- 负左边距：-10px，避免影响内容位置
-
-#### 悬浮按钮
-
-- 绝对定位在右侧
-- 鼠标悬浮时显示（`display: none` → `display: flex`）
-- 按钮尺寸：padding: 1px 4px, font-size: 10px
+- 使用 `app.metadataCache.resolvedLinks` 获取所有文件的链接关系
+- 手动计算反向链接：遍历所有文件，找出引用当前文件的文件
+- 构建反向引用映射：`Record<string, number>` (sourcePath -> linkCount)
+- 从根文件开始递归构建树，子条目是引用当前文件的文件（反向链接）
+- 实现交替的字母/数字编码：
+  - 偶数层级使用字母 (a, b, c, ...)
+  - 奇数层级使用数字 (1, 2, 3, ...)
+- 检测互相引用并使用小数点分隔
+- 自动编号：生成如 1, 1a, 1a1, 1a1a, 1.1 等格式的ID

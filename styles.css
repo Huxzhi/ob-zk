@@ -9,10 +9,34 @@
 
 /* 头部区域 */
 .zk-header {
+	width: 100%;
 	border-bottom: 1px solid var(--background-modifier-border);
 	display: flex;
-	justify-content: space-between;
 	align-items: center;
+	
+}
+
+.zk-controls {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	gap: 8px;
+}
+
+.zk-toggle-btn {
+
+	cursor: pointer;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	border-radius: 3px;
+	color: var(--text-normal);
+	font-size: 0.75em;
+	min-width: auto;
+}
+
+.zk-toggle-btn:hover {
+	background: var(--interactive-hover);
 }
 
 .zk-count {
