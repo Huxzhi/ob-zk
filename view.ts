@@ -1,4 +1,11 @@
-import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from 'obsidian'
+import {
+  CachedMetadata,
+  ItemView,
+  Menu,
+  Notice,
+  TFile,
+  WorkspaceLeaf,
+} from 'obsidian'
 import type ZettelkastenPlugin from './main'
 import { NoteInputModal } from './modal'
 import { getLetterSequenceFromIndex } from './utils'
@@ -10,6 +17,7 @@ export interface ZettelNode {
   id: string // 自动编号ID
   children: ZettelNode[] // 子节点
   level: number
+  taskStatus: 'none' | 'incomplete' | 'complete' | 'mixed' // 任务状态
 }
 
 export class ZettelkastenView extends ItemView {
@@ -244,6 +252,25 @@ export class ZettelkastenView extends ItemView {
         cls: 'zk-id',
         text: zettel.id,
       })
+
+      // 显示任务状态图标
+      if (zettel.taskStatus !== 'none') {
+        const taskIcon = itemContent.createSpan({ cls: 'zk-task-icon' })
+        switch (zettel.taskStatus) {
+          case 'incomplete':
+            taskIcon.innerHTML = '☐' // 未完成任务图标
+            taskIcon.addClass('zk-task-incomplete')
+            break
+          case 'complete':
+            taskIcon.innerHTML = '☑' // 已完成任务图标
+            taskIcon.addClass('zk-task-complete')
+            break
+          case 'mixed':
+            taskIcon.innerHTML = '☒' // 混合状态任务图标
+            taskIcon.addClass('zk-task-mixed')
+            break
+        }
+      }
 
       // 显示标题（直接使用basename，如果有-则去掉前缀）
       const basename = zettel.file.basename
@@ -634,6 +661,9 @@ export class ZettelkastenView extends ItemView {
         useLetters: boolean, // 当前层级是否使用字母
         ancestors: Set<TFile> = new Set(), // 当前分支的祖先节点
       ): ZettelNode => {
+        // 获取文件缓存，避免重复调用
+        const cache = this.app.metadataCache.getFileCache(file)
+
         // 检查是否与当前分支的祖先节点重合，避免循环引用
         if (ancestors.has(file)) {
           // 避免循环引用，返回一个占位节点
@@ -642,6 +672,7 @@ export class ZettelkastenView extends ItemView {
             id: `${currentId}${useLetters ? 'a' : '1'}`,
             children: [],
             level,
+            taskStatus: 'none',
           }
         }
 
@@ -720,6 +751,7 @@ export class ZettelkastenView extends ItemView {
           id: currentId,
           children,
           level,
+          taskStatus: this.getTaskStatus(cache),
         }
       }
 
@@ -744,6 +776,30 @@ export class ZettelkastenView extends ItemView {
       }
     }
     return this.zettelCache
+  }
+
+  private getTaskStatus(
+    cache: CachedMetadata | null,
+  ): 'none' | 'incomplete' | 'complete' | 'mixed' {
+    if (!cache?.listItems) return 'none'
+
+    let hasIncomplete = false
+    let hasComplete = false
+
+    for (const item of cache.listItems) {
+      if (item.task !== undefined) {
+        if (item.task === ' ') {
+          hasIncomplete = true
+        } else {
+          hasComplete = true
+        }
+      }
+    }
+
+    if (hasIncomplete && hasComplete) return 'mixed'
+    if (hasIncomplete) return 'incomplete'
+    if (hasComplete) return 'complete'
+    return 'none'
   }
 
   private sortFiles(files: TFile[]): TFile[] {

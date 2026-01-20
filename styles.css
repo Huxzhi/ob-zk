@@ -98,7 +98,7 @@
 
 .zk-item-content {
 	display: flex;
-	align-items: flex-start;
+	align-items: center;
 	gap: 2px;
 	cursor: pointer;
 	user-select: none;
@@ -111,7 +111,7 @@
 	flex-shrink: 0;
 	cursor: pointer;
 	margin-left: -11px;
-	margin-right: 0px;
+	
 	color: var(--text-muted);
 	transition: transform 0.1s ease, color 0.15s ease;
 	display: flex;
@@ -317,4 +317,25 @@ background: var(--background-modifier-hover);
 		padding: 2px 4px;
 		font-size: 12px;
 	}
+}
+
+/* 任务状态图标样式 */
+.zk-task-icon {
+
+	font-size: 0.9em;
+	display: inline-block;
+	line-height: 1;
+}
+
+.zk-task-incomplete {
+	color: var(--text-accent);
+}
+
+.zk-task-complete {
+	color: var(--text-success, #4CAF50);
+	opacity: 0.8;
+}
+
+.zk-task-mixed {
+	color: var(--text-warning, #FF9800);
 }
