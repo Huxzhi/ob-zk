@@ -1,13 +1,7 @@
 import { App, Plugin, PluginSettingTab, Setting, WorkspaceLeaf } from 'obsidian'
-import { VIEW_TYPE_ZETTELKASTEN, ZettelkastenView } from './view'
+import { VIEW_TYPE_ZETTELKASTEN, ZettelkastenSettings } from './types'
+import { ZettelkastenView } from './view'
 
-interface ZettelkastenSettings {
-  collapsedIds: string[]
-  rootFile: string
-  sortBy: string
-  sortField: string
-  sortOrder: 'asc' | 'desc'
-}
 
 const DEFAULT_SETTINGS: ZettelkastenSettings = {
   collapsedIds: [],

@@ -1,7 +1,7 @@
 {
   "id": "zettelkasten-navigator",
   "name": "Zettelkasten Navigator",
-  "version": "2.0.0",
+  "version": "2.3.0",
   "minAppVersion": "0.15.0",
   "description": "ZK笔记导航器 - 基于引用关系构建树形结构，支持自动编号显示",
   "author": "huxzhi",

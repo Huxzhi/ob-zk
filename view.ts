@@ -1,5 +1,4 @@
 import {
-  CachedMetadata,
   ItemView,
   Menu,
   Notice,
@@ -8,26 +7,16 @@ import {
 } from 'obsidian'
 import type ZettelkastenPlugin from './main'
 import { NoteInputModal } from './modal'
-import { getLetterSequenceFromIndex } from './utils'
-
-export const VIEW_TYPE_ZETTELKASTEN = 'zettelkasten-navigator-view'
-
-export interface ZettelNode {
-  file: TFile // 允许为 null，表示占位节点
-  id: string // 自动编号ID
-  children: ZettelNode[] // 子节点
-  level: number
-  taskStatus: 'none' | 'incomplete' | 'complete' | 'mixed' // 任务状态
-}
+import { VIEW_TYPE_ZETTELKASTEN, ZettelNode } from './types'
+import { buildZettelkastenTree, getZettelChildren } from './tree-builder'
 
 export class ZettelkastenView extends ItemView {
   plugin: ZettelkastenPlugin
-  recentFiles: string[] = [] // 存储最近打开的3个文件路径
   collapsedIds: Set<string> // 存储折叠的条目ID
   private zettelCache: ZettelNode[] | null = null // 缓存显示条目
   private activeItemPath: string | null = null // 当前激活的条目路径
+  private activeItemIndex: number | null = null // 当前激活的条目在列表中的索引
   private refreshTimeout: NodeJS.Timeout | null = null // 防抖定时器
-  private lastRefreshTime: number = 0 // 最后刷新时间戳
   private isRefreshing: boolean = false // 是否正在刷新
 
   constructor(leaf: WorkspaceLeaf, plugin: ZettelkastenPlugin) {
@@ -113,6 +102,13 @@ export class ZettelkastenView extends ItemView {
         }
       }),
     )
+
+    // 监听各类元数据变化
+    this.registerEvent(
+      this.app.metadataCache.on('resolved', () => {
+        this.refresh()
+      }),
+    )
   }
 
   async refresh() {
@@ -143,33 +139,70 @@ export class ZettelkastenView extends ItemView {
 
       listContainer.empty()
 
-      // 清除缓存并重新构建
-      this.zettelCache = null
+      // 1. 构建树
+      const rootNode = buildZettelkastenTree(this.app, this.plugin.settings)
+
+      if (!rootNode) {
+        const countEl = this.contentEl.querySelector('.zk-count')
+        if (countEl) countEl.textContent = '笔记: 0'
+        this.zettelCache = []
+        return
+      }
+
+      // 2. 展平树以便渲染和缓存
+      const flattenTree = (node: ZettelNode): ZettelNode[] => {
+        const result = [node]
+        // Flatten Order: Mutual -> Backlink -> Outgoing
+        for (const child of node.mutuals) {
+          result.push(...flattenTree(child))
+        }
+        for (const child of node.backlinks) {
+          result.push(...flattenTree(child))
+        }
+        for (const child of node.outgoings) {
+          result.push(...flattenTree(child))
+        }
+        return result
+      }
+
+      const flatList: ZettelNode[] = []
+      // 不展示根节点，展平其子节点
+      for (const child of rootNode.mutuals) {
+        flatList.push(...flattenTree(child))
+      }
+      for (const child of rootNode.backlinks) {
+        flatList.push(...flattenTree(child))
+      }
+      for (const child of rootNode.outgoings) {
+        flatList.push(...flattenTree(child))
+      }
+
+      // 调整level
+      flatList.forEach((node) => (node.level -= 1))
+
+      this.zettelCache = flatList
 
       // 更新笔记计数
       const countEl = this.contentEl.querySelector('.zk-count')
       if (countEl) {
-        countEl.textContent = `笔记: ${this.getAllZettels().length}`
+        countEl.textContent = `${rootNode.file.basename} · 笔记: ${flatList.length}`
       }
 
-      // 渲染列表（将嵌套结构展开）
-      this.renderZettelList(listContainer as HTMLElement, this.getAllZettels())
+      // 3. 渲染
+      this.renderZettelList(listContainer as HTMLElement, flatList)
 
       // 性能监控
       const endTime = Date.now()
       const duration = endTime - startTime
       console.log(`ZK view refresh completed in ${duration}ms`)
 
-      // 如果刷新时间过长，显示警告
       if (duration > 1000) {
         console.warn(`ZK view refresh took ${duration}ms - consider optimizing`)
       }
     } catch (error) {
       console.error('ZK view refresh failed:', error)
     } finally {
-      // 重置刷新状态
       this.isRefreshing = false
-      // 更新按钮文本
       this.updateToggleButtonText()
     }
   }
@@ -205,14 +238,16 @@ export class ZettelkastenView extends ItemView {
       const li = ul.createEl('li', { cls: 'zk-item' })
       // 存储文件路径以便后续更新高亮
       li.setAttribute('data-file-path', zettel.file.path)
+      li.setAttribute('data-level', level.toString())
 
       // 如果是当前激活的条目，添加高亮样式
       if (this.activeItemPath && zettel.file?.path === this.activeItemPath) {
         li.addClass('zk-item-active')
       }
-      // 如果是最近打开的文件，添加最近文件样式
-      if (this.recentFiles.includes(zettel.file.path)) {
-        li.addClass('zk-item-recent')
+
+      // 根据连接类型添加样式
+      if (zettel.linkType) {
+        li.addClass(`zk-item-${zettel.linkType}`)
       }
 
       // 根据层级设置缩进
@@ -221,7 +256,10 @@ export class ZettelkastenView extends ItemView {
       // 创建项目容器
       const itemContent = li.createDiv({ cls: 'zk-item-content' })
 
-      const hasChildren = zettel.children && zettel.children.length > 0
+      const hasChildren =
+        (zettel.mutuals?.length > 0) ||
+        (zettel.backlinks?.length > 0) ||
+        (zettel.outgoings?.length > 0)
 
       if (hasChildren) {
         // 添加折叠/展开按钮
@@ -253,6 +291,14 @@ export class ZettelkastenView extends ItemView {
         text: zettel.id,
       })
 
+
+      // 显示标题（直接使用basename，如果有-则去掉前缀）
+      const basename = zettel.file.basename
+
+      const titleSpan = itemContent.createSpan({
+        cls: 'zk-title',
+        text: basename,
+      })
       // 显示任务状态图标
       if (zettel.taskStatus !== 'none') {
         const taskIcon = itemContent.createSpan({ cls: 'zk-task-icon' })
@@ -272,14 +318,6 @@ export class ZettelkastenView extends ItemView {
         }
       }
 
-      // 显示标题（直接使用basename，如果有-则去掉前缀）
-      const basename = zettel.file.basename
-
-      const titleSpan = itemContent.createSpan({
-        cls: 'zk-title',
-        text: basename,
-      })
-
       // 点击打开文件
       itemContent.onclick = async (e) => {
         e.preventDefault()
@@ -293,13 +331,10 @@ export class ZettelkastenView extends ItemView {
         }
 
         // 立即设置高亮
-        this.setActiveItem(li)
         this.activeItemPath = zettel.file.path
+        this.activeItemIndex = i // 记录点击的索引，用于查找子节点
 
-        // 立即保存到最近文件列表
-        this.updateRecentFiles(zettel.file.path)
-
-        // 更新所有高亮样式
+        // 更新所有高亮样式 (包括子节点高亮)
         this.updateHighlight()
 
         // 获取最近使用的主编辑区leaf，而不是当前侧边栏的leaf
@@ -318,6 +353,27 @@ export class ZettelkastenView extends ItemView {
 
       // 拖放功能：设置为可拖动
       li.setAttribute('draggable', 'true')
+
+      // Hover Effect: Highlight all instances of the same file
+      li.addEventListener('mouseenter', () => {
+        const filePath = zettel.file.path
+        const allInstances = container.querySelectorAll(
+          `.zk-item[data-file-path="${filePath}"]`
+        )
+        allInstances.forEach((instance) => {
+          instance.addClass('zk-item-hover')
+        })
+      })
+
+      li.addEventListener('mouseleave', () => {
+        const filePath = zettel.file.path
+        const allInstances = container.querySelectorAll(
+          `.zk-item[data-file-path="${filePath}"]`
+        )
+        allInstances.forEach((instance) => {
+          instance.removeClass('zk-item-hover')
+        })
+      })
 
       // dragstart: 开始拖动时，记录被拖动的文件路径和双链格式
       li.addEventListener('dragstart', (e) => {
@@ -436,7 +492,8 @@ export class ZettelkastenView extends ItemView {
     } else {
       // 如果全部展开，则全部折叠（除了根级别的项目）
       for (const zettel of allZettels) {
-        if (zettel.level > 0 && zettel.children && zettel.children.length > 0) {
+        if (zettel.level > 0 &&
+          (zettel.mutuals?.length > 0 || zettel.backlinks?.length > 0 || zettel.outgoings?.length > 0)) {
           this.collapsedIds.add(zettel.id)
         }
       }
@@ -539,24 +596,7 @@ export class ZettelkastenView extends ItemView {
     modal.open()
   }
 
-  /**
-   * 立即设置指定条目的活跃高亮
-   */
-  private setActiveItem(activeLi: HTMLElement) {
-    const listContainer = this.contentEl.querySelector('.zk-list-container')
-    if (!listContainer) return
 
-    const allItems = listContainer.querySelectorAll('.zk-item')
-
-    allItems.forEach((item) => {
-      const li = item as HTMLElement
-      // 移除活跃高亮，但保留最近文件高亮
-      li.removeClass('zk-item-active')
-    })
-
-    // 给指定条目添加活跃高亮
-    activeLi.addClass('zk-item-active')
-  }
 
   /**
    * 更新列表项的高亮状态（不刷新整个列表）
@@ -567,21 +607,86 @@ export class ZettelkastenView extends ItemView {
 
     const allItems = listContainer.querySelectorAll('.zk-item')
 
+    // 1. 清除所有高亮
     allItems.forEach((item) => {
       const li = item as HTMLElement
-      const filePath = li.getAttribute('data-file-path')
-
-      // 移除所有高亮样式
       li.removeClass('zk-item-active')
-      li.removeClass('zk-item-recent')
+      // Remove child highlights
+      for (let i = 0; i < 7; i++) {
+        li.removeClass(`zk-child-highlight-${i}`)
+      }
+    })
 
-      // 添加对应的高亮样式
-      if (this.activeItemPath && filePath === this.activeItemPath) {
+    if (!this.activeItemPath) return
+
+    // 2. 找到当前激活的节点
+    // zettelCache 是展平的列表，可以用来查找节点
+    if (!this.zettelCache) return
+
+    // 注意：展平列表中可能有多个节点指向同一个文件（如果树结构允许重复）
+    // 但通常我们只需要找到一个"主"节点来获取其子节点信息即可。
+    // 在本实现中，所有节点包含完整的 children (mutuals/backlinks/outgoings) 信息，
+    // 所以找到任意一个匹配 activeItemPath 的节点都可以。
+    const activeNode = this.zettelCache.find(n => n.file.path === this.activeItemPath)
+
+    // 3. 应用高亮
+    if (activeNode) {
+      // 高亮所有该文件的实例
+      const activeInstances = listContainer.querySelectorAll(
+        `.zk-item[data-file-path="${this.activeItemPath.replace(/"/g, '\\"')}"]`
+      )
+      activeInstances.forEach((li) => {
         li.addClass('zk-item-active')
+      })
+
+      // 高亮子节点
+      let index = this.activeItemIndex
+
+      // 如果没有点击记录（例如通过其他方式打开文件），则查找第一个匹配项
+      if ((index === null || index === undefined) && this.zettelCache) {
+        index = this.zettelCache.findIndex(n => n.file.path === this.activeItemPath)
       }
-      if (filePath && this.recentFiles.includes(filePath)) {
-        li.addClass('zk-item-recent')
+
+      if (typeof index === 'number' && index >= 0) {
+        this.highlightActiveChildren(index, listContainer)
       }
+    }
+  }
+
+  private highlightActiveChildren(index: number, container: Element) {
+    if (!this.zettelCache || index < 0 || index >= this.zettelCache.length) return
+
+    const startNode = this.zettelCache[index]
+    const targetLevel = startNode.level + 1
+    const childrenPaths: string[] = []
+
+    // 向下查找直接子节点（通过缩进层级判断）
+    for (let i = index + 1; i < this.zettelCache.length; i++) {
+      const current = this.zettelCache[i]
+
+      // 如果遇到同级或更高级的节点，说明当前分支结束
+      if (current.level <= startNode.level) {
+        break
+      }
+
+      // 只有层级正好+1的才是直接子节点
+      if (current.level === targetLevel) {
+        childrenPaths.push(current.file.path)
+      }
+    }
+
+    // 应用颜色
+    childrenPaths.forEach((path, colorIndex) => {
+      const cssClass = `zk-child-highlight-${colorIndex % 7}`
+
+      // 查找该文件的所有可视实例
+      const instances = container.querySelectorAll(
+        `.zk-item[data-file-path="${path}"]`
+      )
+
+      instances.forEach(li => {
+        li.addClass(cssClass)
+      })
     })
   }
 
@@ -592,279 +697,8 @@ export class ZettelkastenView extends ItemView {
 
   /**
    */
-  private getAllZettels(): Array<ZettelNode> {
-    if (!this.zettelCache) {
-      let zettelFiles = this.app.vault.getMarkdownFiles()
-
-      // 根据设置进行排序
-      zettelFiles = this.sortFiles(zettelFiles)
-
-      // 找到根文件
-      let rootFile: TFile | null = null
-      if (this.plugin.settings.rootFile) {
-        rootFile =
-          zettelFiles.find(
-            (f) => f.basename === this.plugin.settings.rootFile,
-          ) || null
-      }
-      if (!rootFile && zettelFiles.length > 0) {
-        // 如果没有指定根文件，使用排序后的第一个文件作为根
-        rootFile = zettelFiles[0]
-      }
-
-      if (!rootFile) {
-        this.zettelCache = []
-        return this.zettelCache
-      }
-
-      // 构建正向引用映射：file -> 引用的文件列表
-      const forwardLinks = new Map<TFile, TFile[]>()
-      for (const file of zettelFiles) {
-        const links = this.app.metadataCache.getFileCache(file)?.links || []
-        const referencedFiles: TFile[] = []
-        for (const link of links) {
-          const linkedFile = this.app.metadataCache.getFirstLinkpathDest(
-            link.link,
-            file.path,
-          )
-          if (
-            linkedFile &&
-            linkedFile instanceof TFile &&
-            linkedFile.extension === 'md'
-          ) {
-            referencedFiles.push(linkedFile)
-          }
-        }
-        forwardLinks.set(file, referencedFiles)
-      }
-
-      // 获取反向链接的辅助函数
-      const getBacklinks = (file: TFile): Record<string, number> => {
-        const backlinks: Record<string, number> = {}
-        const resolvedLinks = this.app.metadataCache.resolvedLinks
-
-        for (const sourcePath in resolvedLinks) {
-          const links = resolvedLinks[sourcePath]
-          if (links[file.path]) {
-            backlinks[sourcePath] = links[file.path]
-          }
-        }
-
-        return backlinks
-      }
-
-      // 构建树
-      const buildTree = (
-        file: TFile,
-        level: number,
-        currentId: string, // 完整的节点ID
-        useLetters: boolean, // 当前层级是否使用字母
-        ancestors: Set<TFile> = new Set(), // 当前分支的祖先节点
-      ): ZettelNode => {
-        // 获取文件缓存，避免重复调用
-        const cache = this.app.metadataCache.getFileCache(file)
-
-        // 检查是否与当前分支的祖先节点重合，避免循环引用
-        if (ancestors.has(file)) {
-          // 避免循环引用，返回一个占位节点
-          return {
-            file,
-            id: `${currentId}${useLetters ? 'a' : '1'}`,
-            children: [],
-            level,
-            taskStatus: 'none',
-          }
-        }
-
-        // 创建新的祖先集合，包含当前文件
-        const newAncestors = new Set(ancestors)
-        newAncestors.add(file)
-
-        // 注意：currentId 现在作为参数传入，不再在这里生成
-
-        // 使用反向链接获取子节点
-        const backlinks = getBacklinks(file)
-
-        // 分别收集双向引用和单向引用
-        const mutualChildren: TFile[] = [] // 双向引用文件（放在前面）
-        const singleChildren: TFile[] = [] // 单向引用文件
-
-        for (const path in backlinks) {
-          const backlinkFile = this.app.vault.getAbstractFileByPath(path)
-          if (
-            backlinkFile instanceof TFile &&
-            backlinkFile.extension === 'md' &&
-            !newAncestors.has(backlinkFile) // 过滤掉已在祖先中的文件
-          ) {
-            // 检查是否为双向引用
-            const isMutual = getBacklinks(backlinkFile)[file.path] !== undefined
-
-            if (isMutual) {
-              mutualChildren.push(backlinkFile)
-            } else {
-              singleChildren.push(backlinkFile)
-            }
-          }
-        }
-
-        // 合并子节点：双向引用在前，单向引用在后
-        const children: ZettelNode[] = []
-
-        // 为双向引用分配ID并构建节点（小数点 + 字母编号）
-        mutualChildren.forEach((backlinkFile, index) => {
-          const suffix = useLetters
-            ? (index + 1).toString() // 1, 2, 3, ...
-            : getLetterSequenceFromIndex(index)
-          const childId = `${currentId}.${suffix}`
-          // 根据当前ID末尾决定子节点是否使用字母
-          const nextUseLetters = /\d$/.test(childId) // 如果以数字结尾，下一个用字母
-          const childNode = buildTree(
-            backlinkFile,
-            level + 1,
-            childId,
-            nextUseLetters,
-            newAncestors,
-          )
-          children.push(childNode)
-        })
-
-        // 为单向引用分配ID并构建节点（字母数字交替）
-        singleChildren.forEach((backlinkFile, index) => {
-          const suffix = useLetters
-            ? getLetterSequenceFromIndex(index)
-            : (index + 1).toString() // 1, 2, 3, ...
-          const childId = `${currentId}${suffix}`
-          // 根据当前ID末尾决定子节点是否使用字母
-          const nextUseLetters = /\d$/.test(childId) // 如果以数字结尾，下一个用字母
-          const childNode = buildTree(
-            backlinkFile,
-            level + 1,
-            childId,
-            nextUseLetters,
-            newAncestors,
-          )
-          children.push(childNode)
-        })
-
-        return {
-          file,
-          id: currentId,
-          children,
-          level,
-          taskStatus: this.getTaskStatus(cache),
-        }
-      }
-
-      const rootNode = buildTree(rootFile, 0, '', true, new Set()) // 根节点不显示，第一层使用字母
-
-      // 展平树为列表，用于渲染
-      const flattenTree = (node: ZettelNode): ZettelNode[] => {
-        const result = [node]
-        for (const child of node.children) {
-          result.push(...flattenTree(child))
-        }
-        return result
-      }
-
-      // 不展示根节点，直接展示并展平其子节点，调整level让第一层从0开始
-      this.zettelCache = []
-      for (const child of rootNode.children) {
-        const flattened = flattenTree(child)
-        // 调整level，让第一层从0开始显示
-        flattened.forEach((node: ZettelNode) => (node.level -= 1))
-        this.zettelCache.push(...flattened)
-      }
-    }
-    return this.zettelCache
-  }
-
-  private getTaskStatus(
-    cache: CachedMetadata | null,
-  ): 'none' | 'incomplete' | 'complete' | 'mixed' {
-    if (!cache?.listItems) return 'none'
-
-    let hasIncomplete = false
-    let hasComplete = false
-
-    for (const item of cache.listItems) {
-      if (item.task !== undefined) {
-        if (item.task === ' ') {
-          hasIncomplete = true
-        } else {
-          hasComplete = true
-        }
-      }
-    }
-
-    if (hasIncomplete && hasComplete) return 'mixed'
-    if (hasIncomplete) return 'incomplete'
-    if (hasComplete) return 'complete'
-    return 'none'
-  }
-
-  private sortFiles(files: TFile[]): TFile[] {
-    const { sortBy, sortField, sortOrder } = this.plugin.settings
-
-    return files.sort((a, b) => {
-      let valueA: any
-      let valueB: any
-
-      switch (sortBy) {
-        case 'filename':
-          valueA = a.basename.toLowerCase()
-          valueB = b.basename.toLowerCase()
-          break
-
-        case 'created':
-          valueA = a.stat.ctime
-          valueB = b.stat.ctime
-          break
-
-        case 'modified':
-          valueA = a.stat.mtime
-          valueB = b.stat.mtime
-          break
-
-        case 'yaml':
-          const frontmatterA =
-            this.app.metadataCache.getFileCache(a)?.frontmatter
-          const frontmatterB =
-            this.app.metadataCache.getFileCache(b)?.frontmatter
-
-          valueA = frontmatterA?.[sortField] || ''
-          valueB = frontmatterB?.[sortField] || ''
-
-          // 如果是字符串，转为小写进行比较
-          if (typeof valueA === 'string') valueA = valueA.toLowerCase()
-          if (typeof valueB === 'string') valueB = valueB.toLowerCase()
-          break
-
-        default:
-          valueA = a.basename.toLowerCase()
-          valueB = b.basename.toLowerCase()
-      }
-
-      // 比较值
-      let result = 0
-      if (valueA < valueB) result = -1
-      else if (valueA > valueB) result = 1
-
-      // 根据排序顺序调整
-      return sortOrder === 'desc' ? -result : result
-    })
-  }
-
-  updateRecentFiles(filePath: string) {
-    // 移除当前文件（如果已存在）
-    this.recentFiles = this.recentFiles.filter((path) => path !== filePath)
-
-    // 将当前文件添加到开头
-    this.recentFiles.unshift(filePath)
-
-    // 只保留最近的5个文件
-    if (this.recentFiles.length > 5) {
-      this.recentFiles = this.recentFiles.slice(0, 5)
-    }
+  private getAllZettels(): ZettelNode[] {
+    return this.zettelCache || []
   }
 
   async onClose() {

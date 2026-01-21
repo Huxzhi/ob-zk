@@ -13,7 +13,7 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 	display: flex;
 	align-items: center;
-	
+
 }
 
 .zk-controls {
@@ -62,7 +62,7 @@
 .zk-list-container {
 	flex: 1;
 	overflow-y: auto;
-	
+
 }
 
 .zk-list {
@@ -78,12 +78,10 @@
 	padding: 2px 8px;
 	border-left: 2px solid transparent;
 	transition: all 0.2s ease;
+
 }
 
-.zk-item:hover {
-	background: var(--background-modifier-hover);
-	border-left-color: var(--interactive-accent);
-}
+
 
 /* 拖放时的视觉反馈 */
 .zk-item-dragging {
@@ -111,13 +109,14 @@
 	flex-shrink: 0;
 	cursor: pointer;
 	margin-left: -11px;
-	
+
 	color: var(--text-muted);
 	transition: transform 0.1s ease, color 0.15s ease;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	align-self: center; /* 在条目中居中 */
+
+	/* 在条目中居中 */
 }
 
 .zk-collapse-icon svg {
@@ -140,8 +139,10 @@
 	font-weight: var(--nav-item-weight);
 	color: var(--text-accent);
 	flex-shrink: 0;
-	align-self: flex-start; /* ID在条目的偏上方 */
-	margin-top: 1px; /* 微调位置 */
+	align-self: flex-start;
+	/* ID在条目的偏上方 */
+	margin-top: 1px;
+	/* 微调位置 */
 }
 
 /* 标题显示 */
@@ -157,6 +158,7 @@
 
 .zk-item:hover .zk-title {
 	color: var(--text-accent);
+
 }
 
 /* 操作按钮容器 */
@@ -173,9 +175,7 @@
 	box-shadow: 0 2px 2px rgba(0, 0, 0, 0.15);
 }
 
-.zk-item:hover .zk-actions {
-	display: flex;
-}
+
 
 .zk-action-btn {
 	width: 20px;
@@ -201,37 +201,87 @@
 	transform: scale(1.05);
 }
 
-
+/* Duplicate File Highlight (Hover Effect) */
+.zk-item-hover {
+	background: var(--background-modifier-hover);
+	box-shadow: 0 0 4px rgba(var(--interactive-accent-rgb), 0.5);
+	/* Optional: Add a subtle border or other indicator if needed */
+}
 
 /* 当前打开文件高亮 */
 .zk-item-active {
-	background: var(--background-modifier-hover);
+	background: var(--background-modifier-hover) !important;
 	border-left-color: var(--interactive-accent) !important;
+	box-shadow: none !important;
+	/* Ensure no shadow on active item */
 }
 
 .zk-item-active .zk-title {
-	color: var(--interactive-accent);
-	
+	color: var(--interactive-accent) !important;
+
 }
 
-/* 最近打开的文件（蓝色边框） */
-.zk-item-recent {
-background: var(--background-modifier-hover);
-	border-left-color: #448aff ;
-	border-left-width: 2px ;
-	
+/* Active Node's Children Highlight (7 Colors) */
+.zk-child-highlight-0 {
+	border-left-color: #ff5252;
+	border-left-width: 2px;
 }
 
-.zk-item-recent .zk-title {
-	color: var(--text-muted);
-	opacity: 0.85;
+/* Red */
+.zk-child-highlight-1 {
+	border-left-color: #ff9800;
+	border-left-width: 2px;
+}
+
+/* Orange */
+.zk-child-highlight-2 {
+	border-left-color: #ffeb3b;
+	border-left-width: 2px;
+}
+
+/* Yellow */
+.zk-child-highlight-3 {
+	border-left-color: #4caf50;
+	border-left-width: 2px;
+}
+
+/* Green */
+.zk-child-highlight-4 {
+	border-left-color: #00bcd4;
+	border-left-width: 2px;
+}
+
+/* Cyan */
+.zk-child-highlight-5 {
+	border-left-color: #2196f3;
+	border-left-width: 2px;
+}
+
+/* Blue */
+.zk-child-highlight-6 {
+	border-left-color: #9c27b0;
+	border-left-width: 2px;
+}
+
+/* Purple */
+
+/* Override for hover */
+.zk-child-highlight-0:hover,
+.zk-child-highlight-1:hover,
+.zk-child-highlight-2:hover,
+.zk-child-highlight-3:hover,
+.zk-child-highlight-4:hover,
+.zk-child-highlight-5:hover,
+.zk-child-highlight-6:hover {
+	border-left-color: var(--interactive-accent);
 }
 
 
 
-/* hover状态覆盖最近文件的蓝色边框 */
-.zk-item-recent:hover {
-	border-left-color: var(--interactive-accent) 
+
+/* Outgoing Links (>) visual style */
+.zk-item-outgoing {
+	opacity: 0.6;
 }
 
 /* 模态框按钮容器 */
@@ -312,7 +362,7 @@ background: var(--background-modifier-hover);
 	.zk-id {
 		font-size: 0.85em;
 	}
-	
+
 	.zk-action-btn {
 		padding: 2px 4px;
 		font-size: 12px;
@@ -321,7 +371,8 @@ background: var(--background-modifier-hover);
 
 /* 任务状态图标样式 */
 .zk-task-icon {
-
+	align-self: flex-start;
+	/* ID在条目的偏上方 */
 	font-size: 0.9em;
 	display: inline-block;
 	line-height: 1;
